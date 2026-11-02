@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Investment Tracker</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="vendor/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a href="#/" class="brand">Investment Tracker</a>
+    <nav><a href="#/">Portfolio</a></nav>
+    <div class="actions">
+      <button type="button" class="btn ghost small" id="btn-theme" aria-label="Toggle theme">Theme</button>
+      <button type="button" class="btn ghost small" id="btn-refresh">Refresh NAV</button>
+      <button type="button" class="btn primary small" id="btn-add-fund">+ Add fund</button>
+    </div>
+  </header>
+  <main id="app"></main>
+  <div id="modal-root"></div>
+  <div id="toast-root" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
