@@ -20,6 +20,10 @@ async function request(method, url, body) {
     throw new ApiError(0, 'Cannot reach the local server. Is it running?');
   }
   if (!res.ok) {
+    // 423 = vault locked, 409 = no password set yet: let the app switch to the lock / setup screen.
+    if ((res.status === 423 || res.status === 409) && !url.startsWith('/api/auth/')) {
+      window.dispatchEvent(new CustomEvent('vault-state', { detail: { status: res.status } }));
+    }
     let message = res.statusText || `HTTP ${res.status}`;
     try {
       const data = await res.json();
@@ -38,5 +42,6 @@ export const api = {
   get: (url) => request('GET', url),
   post: (url, body) => request('POST', url, body ?? {}),
   put: (url, body) => request('PUT', url, body),
+  patch: (url, body) => request('PATCH', url, body),
   del: (url) => request('DELETE', url),
 };

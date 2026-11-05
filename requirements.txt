@@ -1,2 +1,11 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
+# Runtime dependencies (what the app needs to run from source).
+# Install:  .venv\Scripts\python -m pip install -r requirements.txt
+# run.bat installs these automatically on first start.
+
+fastapi>=0.115          # web framework serving the JSON API and the frontend
+uvicorn[standard]>=0.30 # ASGI server that runs the FastAPI app
+cryptography>=42        # AES-256-GCM encryption of the database file (password-protected vault)
+truststore>=0.9         # verify HTTPS with the Windows certificate store (NPS Trust omits an intermediate cert)
+
+# Everything else used by the app is in Python's standard library (sqlite3, urllib, datetime).
+# Chart.js for the UI is bundled under frontend/vendor, so no Node.js or npm is needed.

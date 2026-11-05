@@ -20,8 +20,9 @@ RETRY_FAILED_AFTER = timedelta(minutes=10)
 HTTP_TIMEOUT = 15
 USER_AGENT = "InvestmentTracker/0.1 (local)"
 
-# scheme_code -> last failed attempt, so an outage doesn't slow every page load
-_last_failure: dict[int, datetime] = {}
+# scheme_code -> (last failed attempt, error), so an outage doesn't slow every page load; the error is
+# reported again (without a new request) until the retry window has passed
+_last_failure: dict[int, tuple[datetime, str]] = {}
 
 
 class NavSourceError(Exception):
@@ -80,12 +81,16 @@ def fetch_history(scheme_code: int) -> tuple[dict, list[tuple[str, float]]]:
 
 # ---------------------------------------------------------------- cache logic
 
+def _recent_failure(code: int, force: bool) -> str | None:
+    failed = _last_failure.get(code)
+    if failed and not force and datetime.now() - failed[0] < RETRY_FAILED_AFTER:
+        return failed[1]
+    return None
+
+
 def _is_stale(conn: sqlite3.Connection, code: int, force: bool) -> bool:
     if force:
         return True
-    failed = _last_failure.get(code)
-    if failed and datetime.now() - failed < RETRY_FAILED_AFTER:
-        return False
     row = conn.execute("SELECT last_fetched FROM scheme_meta WHERE scheme_code = ?", (code,)).fetchone()
     if not row or not row["last_fetched"]:
         return True
@@ -127,15 +132,21 @@ def _store(conn: sqlite3.Connection, code: int, meta: dict, rows: list[tuple[str
 
 def refresh_many(conn: sqlite3.Connection, codes, force: bool = False) -> dict[int, str]:
     """Fetch stale schemes in parallel, store serially. Returns {code: error} for failures."""
-    todo = [c for c in dict.fromkeys(codes) if _is_stale(conn, c, force)]
+    errors: dict[int, str] = {}
+    todo = []
+    for c in dict.fromkeys(codes):
+        recent = _recent_failure(c, force)
+        if recent:
+            errors[c] = recent  # still failing as far as we know; don't hammer the source
+        elif _is_stale(conn, c, force):
+            todo.append(c)
     if not todo:
-        return {}
+        return errors
     with ThreadPoolExecutor(max_workers=min(6, len(todo))) as ex:
         results = list(ex.map(_safe_fetch, todo))
-    errors: dict[int, str] = {}
     for code, res in zip(todo, results):
         if isinstance(res, Exception):
-            _last_failure[code] = datetime.now()
+            _last_failure[code] = (datetime.now(), str(res))
             errors[code] = str(res)
         else:
             _last_failure.pop(code, None)

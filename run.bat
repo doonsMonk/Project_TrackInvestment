@@ -1,10 +1,16 @@
 @echo off
+rem Starts Investment Tracker from source in its own app window, with no console left open.
+rem The first run creates the virtual environment and installs dependencies (needs internet once).
 cd /d "%~dp0"
-if not exist ".venv\Scripts\python.exe" (
+if not exist ".venv\Scripts\pythonw.exe" (
   echo Creating virtual environment and installing dependencies...
-  py -3 -m venv .venv || python -m venv .venv
-  .venv\Scripts\python.exe -m pip install -q -r requirements.txt
+  py -3 -m venv .venv || python -m venv .venv || goto :fail
+  .venv\Scripts\python.exe -m pip install -q -r requirements.txt || goto :fail
 )
-echo Starting Investment Tracker at http://127.0.0.1:8000  (Ctrl+C to stop)
-start "" cmd /c "timeout /t 2 >nul && start http://127.0.0.1:8000"
-.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+start "" ".venv\Scripts\pythonw.exe" launcher.py
+exit /b 0
+
+:fail
+echo Setup failed. See the messages above.
+pause
+exit /b 1

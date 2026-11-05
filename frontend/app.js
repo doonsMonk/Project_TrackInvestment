@@ -1,14 +1,44 @@
 // Investment Tracker frontend: hash-routed single page app, no build step.
-//   #/            portfolio overview
-//   #/fund/<id>   one mutual fund with its transactions
+//   #/            portfolio overview (everything in the base currency, INR)
+//   #/fund/<id>   one holding (mutual fund or stock) with its transactions, in its own currency
 
 import { api } from './api.js';
-import { valueChart, updateValueChart, segmentedBar, themeTokens } from './charts.js';
-import { fmtINR, fmtPct, fmtNum, fmtDate, esc, todayISO, isNum } from './format.js';
+import { valueChart, updateValueChart, segmentedBar, donutChart, stackedColumns, seriesColors, themeTokens } from './charts.js';
+import { fmtMoney, fmtINR, fmtPct, fmtNum, fmtDate, esc, todayISO, isNum } from './format.js';
 import { openModal, closeModal, toast, confirmDialog } from './ui.js';
+import { openImportModal } from './import.js';
+import { splitFolios, distribute, fyLabel } from './parse.js';
 
 const app = document.getElementById('app');
 const RANGES = { '1M': 1, '3M': 3, '6M': 6, '1Y': 12, '3Y': 36, All: null };
+
+// Kind-specific vocabulary: a mutual fund has folios, NAVs and units; a stock has accounts, prices and shares.
+const MOVE_TYPES = { SWITCH_IN: 'Switch in', SWITCH_OUT: 'Switch out', CHARGE: 'Charges' };
+const KINDS = {
+  MF: { key: 'MF', label: 'Mutual fund', lower: 'mutual fund', plural: 'Mutual funds', price: 'NAV', folio: 'Folio', folioPlural: 'folios', unit: 'units', priceDecimals: 4,
+        types: { SIP: 'SIP', LUMPSUM: 'Lumpsum', REDEMPTION: 'Redemption', DIVIDEND: 'Dividend', BONUS: 'Bonus units', ...MOVE_TYPES }, sold: 'redeemed' },
+  STOCK: { key: 'STOCK', label: 'Stock', lower: 'stock', plural: 'Stocks', price: 'Price', folio: 'Account', folioPlural: 'accounts', unit: 'shares', priceDecimals: 2,
+           types: { SIP: 'SIP', LUMPSUM: 'Buy', REDEMPTION: 'Sell', DIVIDEND: 'Dividend', BONUS: 'Bonus shares', ...MOVE_TYPES }, sold: 'sold' },
+  NPS: { key: 'NPS', label: 'NPS account', lower: 'NPS account', plural: 'NPS accounts', price: 'NAV', realisedWhat: 'on units switched or deducted', folio: 'PRAN', folioPlural: 'PRANs', unit: 'units', priceDecimals: 4,
+         types: { SIP: 'Contribution', LUMPSUM: 'Lumpsum contribution', REDEMPTION: 'Withdrawal', DIVIDEND: 'Dividend', BONUS: 'Bonus units', ...MOVE_TYPES }, sold: 'withdrawn' },
+  EPF: { key: 'EPF', label: 'EPF account', lower: 'EPF account', plural: 'EPF accounts', price: 'NAV', realisedWhat: 'on withdrawals', folio: 'UAN', folioPlural: 'UANs', unit: 'rupees', priceDecimals: 2,
+         types: { SIP: 'Deposit', LUMPSUM: 'Transfer in', REDEMPTION: 'Withdrawal', DIVIDEND: 'Dividend', BONUS: 'Interest credited', ...MOVE_TYPES }, sold: 'withdrawn' },
+};
+const EPF_SHARES = { EE: 'Employee share', ER: 'Employer share', EPS: 'Pension (EPS)' };
+/** Indian financial year of an ISO date: '2011-02-15' -> '2010-11'. */
+const fyOfDate = (iso) => { const y = Number(iso.slice(0, 4)); const start = Number(iso.slice(5, 7)) >= 4 ? y : y - 1; return `${start}-${String((start + 1) % 100).padStart(2, '0')}`; };
+const CHIP_CLASS = { REDEMPTION: ' redemption', DIVIDEND: ' dividend', BONUS: ' bonus', SWITCH_IN: ' switch', SWITCH_OUT: ' switch', CHARGE: ' charge' };
+const kindOf = (f) => KINDS[f?.kind] || KINDS.MF;
+const SCHEME_NAMES = { E: 'Equity', C: 'Corporate bonds', G: 'Government securities', A: 'Alternative assets' };
+// Asset classes for the allocation ring, in a fixed order so each keeps its colour as classes are added.
+const ASSET_CLASSES = [
+  { kind: 'MF', label: 'Mutual funds', one: 'fund', many: 'funds' },
+  { kind: 'STOCK', label: 'Stocks', one: 'stock', many: 'stocks' },
+  { kind: 'NPS', label: 'NPS', one: 'account', many: 'accounts' },
+  { kind: 'EPF', label: 'EPF', one: 'account', many: 'accounts' },
+  { kind: 'GOLD', label: 'Gold', one: 'holding', many: 'holdings' },
+];
+let BASE = 'INR'; // portfolio currency, confirmed by the server on boot
 
 function load(key, fallback) {
   try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
@@ -19,6 +49,8 @@ function save(key, value) {
 
 const state = {
   chart: null,
+  donut: null,
+  holdingsTab: 'active', // portfolio table: 'active' or 'closed'
   history: [],
   range: load('range', '1Y'),
   theme: load('theme', 'auto'),
@@ -56,23 +88,53 @@ const LOCK_ICON =
 const UNLOCK_ICON =
   '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>';
 
-function statusBadge(locked, until) {
-  if (!locked) return `<span class="badge open">${UNLOCK_ICON} Open</span>`;
-  const till = until ? ` till ${fmtDate(until)}` : '';
+function statusBadge(f) {
+  if (f.closed) return `<span class="badge closed" title="Sold out completely; kept with all its transactions">Closed${f.closed_on ? ` · ${fmtDate(f.closed_on)}` : ''}</span>`;
+  if (!f.locked) return `<span class="badge open">${UNLOCK_ICON} Open</span>`;
+  const till = f.lock_in_until ? ` till ${fmtDate(f.lock_in_until)}` : '';
   return `<span class="badge locked" title="Under lock-in${till}">${LOCK_ICON} Locked${till}</span>`;
 }
 
-function hero(label, value, profit, absPct) {
+/** "realised ₹1,277 (₹1,200 from sales · ₹77 dividends)", or '' when nothing has been realised. */
+function realisedText(s, M, what = 'from sales') {
+  const r = s.realised_gain || 0;
+  const d = s.dividends || 0;
+  if (!r && !d) return '';
+  if (r && d) return `realised ${M(r + d)} (${M(r)} ${what} · ${M(d)} dividends)`;
+  return `realised ${M(r + d)} ${d ? 'in dividends' : what}`;
+}
+
+/** Investment less the dividends already received, shown under the investment figure. */
+function netOfDividends(s, M) {
+  if (!s.dividends || !s.invested) return '';
+  return s.net_invested > 0 ? `${M(s.net_invested)} net of dividends received` : 'dividends received exceed the cost';
+}
+
+function kindChip(f) {
+  const short = { STOCK: 'Stock', NPS: 'NPS', EPF: 'EPF' }[f.kind] || 'MF';
+  return `<span class="chip kind${f.kind === 'MF' || !f.kind ? '' : ` ${f.kind.toLowerCase()}`}">${short}</span>`;
+}
+
+function hero({ label, value, profit, absPct, realised = 0, dividends = 0, currency = BASE, approx = '', realisedWhat = 'from sales' }) {
+  const M = (v) => fmtMoney(v, currency);
   const has = isNum(profit);
   const up = has && profit >= 0;
+  const taken = realisedText({ realised_gain: realised, dividends }, M, realisedWhat);
+  let sub;
+  if (has) {
+    sub = `<div class="delta ${up ? 'up' : 'down'}"><span aria-hidden="true">${up ? '▲' : '▼'}</span> ${M(Math.abs(profit))}
+             <span class="muted">(${fmtPct(absPct)}) ${taken ? 'unrealised ' : ''}${up ? 'gain' : 'loss'}${taken ? ' on current holdings' : ''}</span></div>${taken ? `<div class="muted small">${taken}</div>` : ''}`;
+  } else if (realised || dividends) {
+    sub = `<div class="delta ${realised + dividends >= 0 ? 'up' : 'down'}">${taken} <span class="muted">· nothing held now</span></div>`;
+  } else {
+    sub = '<div class="muted small">Add transactions to see returns</div>';
+  }
   return `
     <section class="card hero">
       <div class="tile-label">${label}</div>
-      <div class="hero-value">${fmtINR(value)}</div>
-      ${has
-        ? `<div class="delta ${up ? 'up' : 'down'}"><span aria-hidden="true">${up ? '▲' : '▼'}</span> ${fmtINR(Math.abs(profit))}
-             <span class="muted">(${fmtPct(absPct)}) ${up ? 'gain' : 'loss'} overall</span></div>`
-        : '<div class="muted small">Add transactions to see returns</div>'}
+      <div class="hero-value">${M(value)}</div>
+      ${sub}
+      ${approx ? `<div class="approx">${approx}</div>` : ''}
     </section>`;
 }
 
@@ -80,10 +142,10 @@ function tile(label, valueHtml, sub = '') {
   return `<div class="card tile"><div class="tile-label">${label}</div><div class="tile-value">${valueHtml}</div>${sub ? `<div class="tile-sub">${sub}</div>` : ''}</div>`;
 }
 
-function deltaValue(profit) {
+function deltaValue(profit, currency = BASE) {
   if (!isNum(profit)) return '–';
   const up = profit >= 0;
-  return `<span class="delta ${up ? 'up' : 'down'}"><span aria-hidden="true">${up ? '▲' : '▼'}</span> ${fmtINR(Math.abs(profit))}</span>`;
+  return `<span class="delta ${up ? 'up' : 'down'}"><span aria-hidden="true">${up ? '▲' : '▼'}</span> ${fmtMoney(Math.abs(profit), currency)}</span>`;
 }
 
 function rangeButtons() {
@@ -95,7 +157,7 @@ function rangeButtons() {
 function navErrorBanner(errors) {
   const msgs = Object.values(errors || {});
   if (!msgs.length) return '';
-  return `<div class="banner warn" role="status">⚠ NAV refresh failed for ${msgs.length} scheme${msgs.length > 1 ? 's' : ''}; showing last cached values. <span class="small">${esc(msgs[0])}</span></div>`;
+  return `<div class="banner warn" role="status">⚠ Price refresh failed for ${msgs.length} source${msgs.length > 1 ? 's' : ''}; showing last cached values. <span class="small">${esc(msgs[0])}</span></div>`;
 }
 
 const loading = () => '<section class="card"><p class="empty">Loading…</p></section>';
@@ -120,9 +182,17 @@ function destroyChart() {
     state.chart.destroy();
     state.chart = null;
   }
+  if (state.donut) {
+    state.donut.destroy();
+    state.donut = null;
+  }
+  if (state.yearChart) {
+    state.yearChart.destroy();
+    state.yearChart = null;
+  }
 }
 
-function mountChart(history) {
+function mountChart(history, currency = BASE) {
   state.history = history;
   const canvas = document.getElementById('value-chart');
   if (!canvas) return;
@@ -135,7 +205,9 @@ function mountChart(history) {
     wrap.innerHTML = '<p class="empty">Chart library did not load (offline?). Figures above are still current.</p>';
     return;
   }
-  state.chart = valueChart(canvas, filterHistory(history, state.range));
+  let shown = filterHistory(history, state.range);
+  if (!shown.some((p) => p.value || p.invested)) shown = history; // closed before the range began: show its whole life instead of a flat zero
+  state.chart = valueChart(canvas, shown, { currency });
 }
 
 function wireRange(root) {
@@ -150,53 +222,200 @@ function wireRange(root) {
 }
 
 // ---------------------------------------------------------------- portfolio view
+/** Current value by asset class, in the fixed ASSET_CLASSES order (unknown classes follow, alphabetically). */
+function allocationParts(t) {
+  const bk = t.by_kind || {};
+  const colors = seriesColors();
+  const known = ASSET_CLASSES.map((c) => c.kind);
+  const extra = Object.keys(bk).filter((k) => !known.includes(k)).sort();
+  const classes = [...ASSET_CLASSES, ...extra.map((k) => ({ kind: k, label: k[0] + k.slice(1).toLowerCase(), one: 'holding', many: 'holdings' }))];
+  const parts = classes
+    .map((c, i) => ({ ...c, color: colors[i % colors.length], ...(bk[c.kind] || { count: 0, invested: 0, current_value: 0 }) }))
+    .filter((p) => p.count > 0);
+  const total = parts.reduce((s, p) => s + Math.max(0, p.current_value), 0);
+  parts.forEach((p) => { p.share = total ? (Math.max(0, p.current_value) / total) * 100 : 0; });
+  return { parts, total };
+}
+
+function allocationSection(t, alloc) {
+  const rows = alloc.parts
+    .map(
+      (p) => `<div class="kv-row"><i class="swatch" style="background:${p.color}"></i><span>${esc(p.label)}</span><span class="muted small">${p.count} ${p.count === 1 ? p.one : p.many} · invested ${fmtINR(p.invested)} · ${p.share.toFixed(1)}%</span><b>${fmtINR(p.current_value)}</b></div>`,
+    )
+    .join('');
+  const currencyRows = (t.currencies || [])
+    .map(
+      (c) => `<div class="kv-row currency-row"><span>${esc(c.currency)} holdings</span><span class="muted small">${c.count} stock${c.count === 1 ? '' : 's'} · ${fmtMoney(c.current_value, c.currency)} · 1 ${esc(c.currency)} = ${fmtINR(c.rate, 2)} on ${fmtDate(c.rate_date)}</span><b>${fmtINR(c.current_value_base)}</b></div>`,
+    )
+    .join('');
+  const summary = alloc.parts.map((p) => `${p.label} ${fmtINR(p.current_value)} (${p.share.toFixed(1)}%)`).join(', ');
+  return `
+    <section class="card">
+      <div class="card-head"><h2>Allocation</h2><span class="muted small">current value by asset class, in ${esc(BASE)}</span></div>
+      <div class="alloc-grid">
+        <div class="donut-wrap"><canvas id="alloc-chart" role="img" aria-label="Allocation: ${esc(summary)}"></canvas></div>
+        <div class="kv-list alloc-list">${rows}${currencyRows}</div>
+      </div>
+    </section>`;
+}
+
+function mountDonut(alloc) {
+  const canvas = document.getElementById('alloc-chart');
+  if (!canvas) return;
+  const wrap = canvas.closest('.donut-wrap');
+  if (!alloc.total) {
+    wrap.innerHTML = '<p class="empty small">Nothing valued yet.</p>';
+    return;
+  }
+  if (!window.Chart) {
+    wrap.innerHTML = '<p class="empty small">Chart library did not load; the list on the right has the figures.</p>';
+    return;
+  }
+  state.donut = donutChart(canvas, alloc.parts.map((p) => ({ label: p.label, value: p.current_value, color: p.color })), { currency: BASE, centreLabel: 'current value' });
+}
+
 async function renderPortfolio() {
   app.innerHTML = loading();
   const data = await api.get('/api/portfolio');
   const t = data.totals;
+  BASE = data.base_currency || BASE;
 
   if (!data.funds.length) {
     app.innerHTML = `
       <div class="page-head"><h1>Portfolio</h1></div>
       <section class="card empty-card">
-        <h2>No funds yet</h2>
-        <p>Add a mutual fund, then record your SIP installments or lumpsum purchases. NAVs are fetched automatically from AMFI data.</p>
-        <button type="button" class="btn primary" id="btn-add-fund-inline">+ Add your first fund</button>
+        <h2>Nothing here yet</h2>
+        <p>Add a mutual fund or a stock, then record your purchases and sales. NAVs come from AMFI data; stock prices and exchange rates from Yahoo Finance.</p>
+        <button type="button" class="btn primary" id="btn-add-fund-inline">+ Add your first holding</button>
       </section>`;
     return;
   }
 
   const asOf = data.funds.map((f) => f.summary.latest_nav_date).filter(Boolean).sort().pop();
   const tokens = themeTokens();
-  const rows = data.funds
-    .map((f) => {
-      const s = f.summary;
-      const sub = [f.scheme?.scheme_category, f.folio_number ? `Folio ${f.folio_number}` : ''].filter(Boolean).join(' · ');
+  const anyStock = data.funds.some((f) => f.kind === 'STOCK');
+  const activeFunds = data.funds.filter((f) => !f.closed);
+  const closedFunds = data.funds.filter((f) => f.closed);
+  const rowBits = (f) => {
+    const k = kindOf(f);
+    const s = f.summary;
+    const cur = f.currency || BASE;
+    const foreign = Boolean(f.needs_fx);
+    const bs = foreign ? f.base?.summary : s; // figures in the base currency (undefined when no exchange rate yet)
+    const folioText = f.folio_count > 1 ? `${f.folio_count} ${k.folioPlural}` : f.folio_number ? `${k.folio} ${f.folio_number}` : '';
+    const what = f.kind === 'STOCK'
+      ? [f.symbol, f.exchange, cur].filter(Boolean).join(' · ')
+      : f.kind === 'NPS'
+        ? ['NPS', f.details?.pfm, f.details?.tier ? `Tier ${f.details.tier}` : '', f.schemes?.length ? `Schemes ${f.schemes.map((p) => p.scheme).join(' / ')}` : ''].filter(Boolean).join(' · ')
+        : f.kind === 'EPF'
+          ? ['EPF', f.details?.employer, f.epf?.pending_interest_fy ? `interest for FY ${f.epf.pending_interest_fy} pending` : ''].filter(Boolean).join(' · ')
+          : f.scheme?.scheme_category;
+    const sub = [what, folioText].filter(Boolean).join(' · ');
+    const native = (v) => (foreign ? `<div class="sub-amount">${fmtMoney(v, cur)}</div>` : '');
+    const nameCell = `<td><div class="fund-name">${anyStock ? kindChip(f) : ''}${esc(f.name)}</div><div class="muted small">${esc(sub)}</div></td>`;
+    const xirrCell = `<td class="num">${fmtPct(pct(bs?.xirr))}${foreign && bs ? `<div class="sub-amount">${fmtPct(pct(s.xirr))} in ${esc(cur)}</div>` : ''}</td>`;
+    const editCell = `<td class="row-actions"><button type="button" class="link-btn" data-edit-fund="${f.id}" title="Edit name, scheme or symbol, folio or status">Edit</button></td>`;
+    return { k, s, cur, foreign, bs, native, nameCell, xirrCell, editCell };
+  };
+  const kindsOf = (list) => {
+    const present = [...new Set(list.map((f) => f.kind || 'MF'))];
+    const order = ASSET_CLASSES.map((c) => c.kind);
+    return present.sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
+  };
+  const classOf = (kind) => ASSET_CLASSES.find((c) => c.kind === kind) || { kind, label: kind, one: 'holding', many: 'holdings' };
+  const inrOf = (f) => (f.needs_fx ? f.base?.summary : f.summary) || null;
+  /** Groups the user has collapsed, as "tab:KIND" keys, remembered between visits. */
+  const collapsed = (() => {
+    try { return new Set(JSON.parse(load('holdingsCollapsed', '[]'))); } catch { return new Set(); }
+  })();
+  /**
+   * Rows grouped under one header per asset class, each group with a subtotal, when more than one class is
+   * present. The header is a toggle: a collapsed group hides its holdings and keeps only the subtotal row.
+   */
+  const grouped = (list, rowHtml, subtotalHtml, span, tab) => {
+    const kinds = kindsOf(list);
+    if (kinds.length < 2) return list.map(rowHtml).join('');
+    return kinds
+      .map((kind) => {
+        const group = list.filter((f) => (f.kind || 'MF') === kind);
+        const c = classOf(kind);
+        const key = `${tab}:${kind}`;
+        const shut = collapsed.has(key);
+        const head = `<tr class="group-row${shut ? ' collapsed' : ''}"><td colspan="${span}">
+            <button type="button" class="group-toggle" data-group-toggle="${key}" data-kind="${kind}" aria-expanded="${!shut}" title="${shut ? 'Show' : 'Hide'} the holdings in this group">
+              <span class="chev" aria-hidden="true"></span>${kindChip({ kind })}<span>${esc(c.label)}</span><span class="muted small">${group.length} ${group.length === 1 ? c.one : c.many}</span>
+            </button></td></tr>`;
+        const body = group.map((f) => rowHtml(f).replace('<tr', `<tr data-group="${kind}"${shut ? ' hidden' : ''}`)).join('');
+        return head + body + subtotalHtml(c, group);
+      })
+      .join('');
+  };
+  const activeSubtotal = (c, group) => {
+    const sums = group.map(inrOf).filter(Boolean);
+    const invested = sums.reduce((s, x) => s + x.invested, 0);
+    const value = sums.reduce((s, x) => s + x.current_value, 0);
+    return `<tr class="group-total"><td colspan="2">${esc(c.label)}</td><td class="num">${fmtINR(invested)}</td><td class="num">${fmtINR(value)}</td><td class="num">${deltaValue(invested ? value - invested : null)}</td><td colspan="3"></td></tr>`;
+  };
+  const closedSubtotal = (c, group) => {
+    const sums = group.map(inrOf).filter(Boolean);
+    const bought = sums.reduce((s, x) => s + x.purchased, 0);
+    const sold = sums.reduce((s, x) => s + x.redeemed, 0);
+    const realised = sums.reduce((s, x) => s + x.realised_total, 0);
+    return `<tr class="group-total"><td colspan="2">${esc(c.label)}</td><td class="num">${fmtINR(bought)}</td><td class="num">${fmtINR(sold)}</td><td class="num">${deltaValue(realised)}</td><td colspan="2"></td></tr>`;
+  };
+  const activeRow = (f) => {
+      const { k, s, cur, bs, native, nameCell, xirrCell, editCell } = rowBits(f);
+      const taken = bs ? realisedText(bs, fmtINR, k.realisedWhat || 'from sales') : '';
       return `
         <tr class="row-link" data-href="#/fund/${f.id}" tabindex="0">
-          <td><div class="fund-name">${esc(f.name)}</div><div class="muted small">${esc(sub)}</div></td>
-          <td>${statusBadge(f.locked, f.lock_in_until)}</td>
-          <td class="num">${fmtINR(s.invested)}</td>
-          <td class="num">${fmtINR(s.current_value)}</td>
-          <td class="num">${deltaValue(s.profit)}<div class="muted small">${fmtPct(s.abs_return_pct)}</div></td>
-          <td class="num">${fmtPct(pct(s.xirr))}</td>
-          <td class="num muted small">${isNum(s.latest_nav) ? `${fmtNum(s.latest_nav, 4)}<br>${fmtDate(s.latest_nav_date)}` : '–'}</td>
+          ${nameCell}
+          <td>${statusBadge(f)}</td>
+          <td class="num">${bs ? fmtINR(bs.invested) : '–'}${native(s.invested)}</td>
+          <td class="num">${bs ? fmtINR(bs.current_value) : '–'}${native(s.current_value)}</td>
+          <td class="num">${bs ? deltaValue(bs.invested ? bs.profit : null) : '–'}<div class="muted small">${bs ? fmtPct(bs.abs_return_pct) : ''}${taken ? ` · ${taken}` : ''}</div></td>
+          ${xirrCell}
+          <td class="num muted small">${isNum(s.latest_nav) ? `${fmtMoney(s.latest_nav, cur, k.priceDecimals)}<br>${fmtDate(s.latest_nav_date)}` : f.kind === 'NPS' && f.schemes?.length ? f.schemes.map((p) => `${esc(p.scheme)} ${isNum(p.summary.latest_nav) ? fmtNum(p.summary.latest_nav, 2) : '–'}`).join('<br>') : f.kind === 'EPF' ? `${fmtINR(s.interest)}<br>interest` : '–'}</td>
+          ${editCell}
         </tr>`;
-    })
-    .join('');
+    };
+  const rows = grouped(activeFunds, activeRow, activeSubtotal, 8, 'active');
+  const closedRow = (f) => {
+      const { s, bs, native, nameCell, xirrCell, editCell } = rowBits(f);
+      return `
+        <tr class="row-link" data-href="#/fund/${f.id}" tabindex="0">
+          ${nameCell}
+          <td>${statusBadge(f)}</td>
+          <td class="num">${bs ? fmtINR(bs.purchased) : '–'}${native(s.purchased)}</td>
+          <td class="num">${bs ? fmtINR(bs.redeemed) : '–'}${native(s.redeemed)}</td>
+          <td class="num">${bs ? deltaValue(bs.realised_total) : '–'}<div class="muted small">${bs?.dividends ? `incl. ${fmtINR(bs.dividends)} dividends` : ''}</div></td>
+          ${xirrCell}
+          ${editCell}
+        </tr>`;
+    };
+  const closedRows = grouped(closedFunds, closedRow, closedSubtotal, 7, 'closed');
+  const tab = closedFunds.length && state.holdingsTab === 'closed' ? 'closed' : 'active';
+  const tabs = closedFunds.length
+    ? `<div class="range-filter" role="tablist" aria-label="Holdings">
+        <button type="button" class="range-btn${tab === 'active' ? ' active' : ''}" data-tab="active" role="tab">Active (${activeFunds.length})</button>
+        <button type="button" class="range-btn${tab === 'closed' ? ' active' : ''}" data-tab="closed" role="tab">Closed (${closedFunds.length})</button>
+      </div>`
+    : '';
 
+  const unconverted = t.unconverted || [];
+  const alloc = allocationParts(t);
   app.innerHTML = `
     ${navErrorBanner(data.nav_errors)}
+    ${unconverted.length ? `<div class="banner warn">No exchange rate yet for ${esc(unconverted.join(', '))}, so ${unconverted.length === 1 ? 'it is' : 'they are'} left out of the totals below. Click <b>Refresh prices</b> when you are online.</div>` : ''}
     <div class="page-head">
       <h1>Portfolio</h1>
-      <div class="muted small">${asOf ? `NAV as of ${fmtDate(asOf)} · ` : ''}${t.fund_count} fund${t.fund_count === 1 ? '' : 's'}</div>
+      <div class="muted small">${asOf ? `Prices as of ${fmtDate(asOf)} · ` : ''}${t.fund_count} holding${t.fund_count === 1 ? '' : 's'}${t.closed_count ? ` · ${t.closed_count} closed` : ''}${anyStock ? ` · totals in ${esc(BASE)}` : ''}</div>
     </div>
     <section class="summary-grid">
-      ${hero('Current value', t.current_value, t.invested ? t.profit : null, t.abs_return_pct)}
+      ${hero({ label: 'Current value', value: t.current_value, profit: t.invested ? t.profit : null, absPct: t.abs_return_pct, realised: t.realised_gain, dividends: t.dividends })}
       <div class="tiles">
-        ${tile('Total investment', fmtINR(t.invested))}
-        ${tile('Total profit', deltaValue(t.invested ? t.profit : null), isNum(t.abs_return_pct) ? `${fmtPct(t.abs_return_pct)} absolute` : '')}
-        ${tile('XIRR', fmtPct(pct(t.xirr)), 'annualised, all funds')}
+        ${tile(t.redeemed ? 'Investment in holdings' : 'Total investment', fmtINR(t.invested), [t.redeemed ? `${fmtINR(t.purchased)} bought · ${fmtINR(t.redeemed)} sold` : '', netOfDividends(t, fmtINR)].filter(Boolean).join(' · '))}
+        ${tile(t.redeemed || t.dividends ? 'Unrealised profit' : 'Total profit', deltaValue(t.invested ? t.profit : null), [isNum(t.abs_return_pct) ? `${fmtPct(t.abs_return_pct)} absolute` : '', realisedText(t, fmtINR)].filter(Boolean).join(' · '))}
+        ${tile('XIRR', fmtPct(pct(t.xirr)), `annualised, all holdings${anyStock ? `, in ${esc(BASE)}` : ''}`)}
         ${tile('Redeemable now', fmtINR(t.unlocked_value), `${fmtINR(t.locked_value)} locked`)}
       </div>
     </section>
@@ -204,6 +423,7 @@ async function renderPortfolio() {
       <div class="card-head"><h2>Portfolio value over time</h2>${rangeButtons()}</div>
       <div class="chart-wrap"><canvas id="value-chart" role="img" aria-label="Portfolio current value and invested amount over time"></canvas></div>
     </section>
+    ${allocationSection(t, alloc)}
     <section class="card">
       <div class="card-head"><h2>Locked vs redeemable</h2><span class="muted small">by current value</span></div>
       ${segmentedBar(
@@ -214,128 +434,571 @@ async function renderPortfolio() {
         { ariaLabel: `Redeemable ${fmtINR(t.unlocked_value)}, locked ${fmtINR(t.locked_value)}` },
       )}
       <div class="kv-list">
-        <div class="kv-row"><span>Redeemable now</span><span class="muted small">${t.fund_count - t.locked_count} open fund${t.fund_count - t.locked_count === 1 ? '' : 's'} · invested ${fmtINR(t.unlocked_invested)}</span><b>${fmtINR(t.unlocked_value)}</b></div>
-        <div class="kv-row"><span>Locked</span><span class="muted small">${t.locked_count} locked fund${t.locked_count === 1 ? '' : 's'} · invested ${fmtINR(t.locked_invested)}</span><b>${fmtINR(t.locked_value)}</b></div>
+        <div class="kv-row"><span>Redeemable now</span><span class="muted small">${t.fund_count - t.locked_count} open · invested ${fmtINR(t.unlocked_invested)}</span><b>${fmtINR(t.unlocked_value)}</b></div>
+        <div class="kv-row"><span>Locked</span><span class="muted small">${t.locked_count} locked · invested ${fmtINR(t.locked_invested)}</span><b>${fmtINR(t.locked_value)}</b></div>
       </div>
     </section>
     <section class="card">
-      <div class="card-head"><h2>Funds</h2><button type="button" class="btn primary small" id="btn-add-fund-inline">+ Add fund</button></div>
-      <div class="table-wrap">
+      <div class="card-head"><div class="filter-bar"><h2>Holdings</h2>${tabs}</div><button type="button" class="btn primary small" id="btn-add-fund-inline">+ Add fund / stock</button></div>
+      <div class="table-wrap" id="holdings-active" ${tab === 'active' ? '' : 'hidden'}>
+        ${activeFunds.length ? `
         <table class="data">
-          <thead><tr><th>Fund</th><th>Status</th><th class="num">Invested</th><th class="num">Current value</th><th class="num">P&amp;L</th><th class="num">XIRR</th><th class="num">Latest NAV</th></tr></thead>
+          <thead><tr><th>Holding</th><th>Status</th><th class="num">Invested</th><th class="num">Current value</th><th class="num">P&amp;L</th><th class="num">XIRR</th><th class="num">Latest ${anyStock ? 'NAV / price' : 'NAV'}</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
-          <tfoot><tr><td colspan="2">Total</td><td class="num">${fmtINR(t.invested)}</td><td class="num">${fmtINR(t.current_value)}</td><td class="num">${deltaValue(t.invested ? t.profit : null)}</td><td class="num">${fmtPct(pct(t.xirr))}</td><td></td></tr></tfoot>
-        </table>
+          <tfoot><tr><td colspan="2">Total${anyStock ? ` (${esc(BASE)})` : ''}</td><td class="num">${fmtINR(t.invested)}</td><td class="num">${fmtINR(t.current_value)}</td><td class="num">${deltaValue(t.invested ? t.profit : null)}</td><td class="num">${fmtPct(pct(t.xirr))}</td><td colspan="2"></td></tr></tfoot>
+        </table>` : '<p class="empty">Nothing held at the moment. Everything you had is under Closed.</p>'}
       </div>
+      ${closedFunds.length ? `
+      <div class="table-wrap" id="holdings-closed" ${tab === 'closed' ? '' : 'hidden'}>
+        <table class="data">
+          <thead><tr><th>Holding</th><th>Status</th><th class="num">Bought</th><th class="num">Sold for</th><th class="num">Realised</th><th class="num">XIRR</th><th></th></tr></thead>
+          <tbody>${closedRows}</tbody>
+        </table>
+        <p class="muted small" style="margin-top:8px">Closed holdings were sold out completely. Their transactions, realised gains and dividends are kept and still count in the totals above; adding a purchase reopens one.</p>
+      </div>` : ''}
     </section>`;
 
-  mountChart(data.history);
+  mountChart(data.history, BASE);
+  mountDonut(alloc);
   wireRange(app);
+  app.querySelectorAll('[data-tab]').forEach((b) =>
+    b.addEventListener('click', () => {
+      state.holdingsTab = b.dataset.tab;
+      app.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('active', x === b));
+      document.getElementById('holdings-active').hidden = state.holdingsTab !== 'active';
+      const closedWrap = document.getElementById('holdings-closed');
+      if (closedWrap) closedWrap.hidden = state.holdingsTab !== 'closed';
+    }),
+  );
+  app.querySelectorAll('[data-group-toggle]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const key = b.dataset.groupToggle;
+      const open = b.getAttribute('aria-expanded') !== 'true';
+      if (open) collapsed.delete(key); else collapsed.add(key);
+      save('holdingsCollapsed', JSON.stringify([...collapsed]));
+      b.setAttribute('aria-expanded', String(open));
+      b.title = `${open ? 'Hide' : 'Show'} the holdings in this group`;
+      const head = b.closest('tr');
+      head.classList.toggle('collapsed', !open);
+      head.closest('tbody').querySelectorAll(`tr[data-group="${b.dataset.kind}"]`).forEach((r) => { r.hidden = !open; });
+    }),
+  );
   app.querySelectorAll('tr.row-link').forEach((tr) => {
     const go = () => { location.hash = tr.dataset.href; };
-    tr.addEventListener('click', go);
+    tr.addEventListener('click', (e) => { if (!e.target.closest('[data-edit-fund]')) go(); });
     tr.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
     });
   });
+  app.querySelectorAll('[data-edit-fund]').forEach((b) =>
+    b.addEventListener('click', () => openFundModal({ id: Number(b.dataset.editFund) })),
+  );
 }
 
 // ---------------------------------------------------------------- fund view
-function txnTable(txns) {
-  const totalAmount = txns.reduce((s, t) => s + t.amount, 0);
-  const totalUnits = txns.reduce((s, t) => s + t.units, 0);
-  const body = txns
-    .map(
-      (tx) => `
-      <tr data-id="${tx.id}">
-        <td>${fmtDate(tx.date)}</td>
-        <td>${esc(tx.folio_number) || '–'}</td>
-        <td><span class="chip">${tx.type === 'SIP' ? 'SIP' : 'Lumpsum'}</span></td>
-        <td class="num">${fmtINR(tx.amount, 2)}</td>
-        <td class="num">${fmtNum(tx.nav, 4)}</td>
-        <td class="num">${fmtNum(tx.units, 4)}</td>
+function commentCell(notes) {
+  return notes
+    ? `<button type="button" class="comment-text" title="${esc(notes)} (click to edit)">${esc(notes)}</button>`
+    : '<button type="button" class="link-btn comment-add">+ Add comment</button>';
+}
+
+/** Turn a comment cell into an inline editor; Enter or blur saves, Escape cancels. */
+function startCommentEdit(td, tx, others = []) {
+  if (td.querySelector('input')) return;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'comment-input';
+  input.maxLength = 500;
+  input.placeholder = 'Comment…';
+  input.value = tx.notes || '';
+  td.replaceChildren(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const value = input.value.trim();
+    if (!save || value === (tx.notes || '')) { td.innerHTML = commentCell(tx.notes); return; }
+    try {
+      const updated = await api.patch(`/api/transactions/${tx.id}/notes`, { notes: value });
+      tx.notes = updated.notes;
+      await Promise.all(others.map(async (o) => { o.notes = (await api.patch(`/api/transactions/${o.id}/notes`, { notes: value })).notes; }));
+      td.innerHTML = commentCell(tx.notes);
+      toast(value ? 'Comment saved' : 'Comment removed');
+    } catch (e) {
+      td.innerHTML = commentCell(tx.notes);
+      toast(`Could not save comment: ${e.message}`, 'error');
+    }
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+/** EPF entries grouped into one row per month: the employee, employer and pension entries of the same date and
+ * type side by side. Each row carries the ids of its entries so Edit / Delete act on the whole month. */
+function epfGroups(txns) {
+  const rows = [];
+  const index = new Map();
+  for (const t of txns) { // newest first, as served
+    const base = `${t.date}|${t.type}|${t.folio_number || ''}`;
+    let list = index.get(base);
+    if (!list) { list = []; index.set(base, list); }
+    let g = list.find((x) => !x.shares[t.scheme]);
+    if (!g) { g = { date: t.date, type: t.type, folio: t.folio_number || '', shares: {}, entries: [] }; list.push(g); rows.push(g); }
+    g.shares[t.scheme] = t;
+    g.entries.push(t);
+  }
+  return rows;
+}
+
+function epfTxnTable(txns, cur) {
+  const M = (v, d = 2) => fmtMoney(v, cur, d);
+  const amountOf = (t) => (t.type === 'BONUS' ? t.units : t.amount);
+  const sum = (pred) => txns.filter(pred).reduce((s, t) => s + amountOf(t), 0);
+  const deposits = sum((t) => (t.type === 'SIP' || t.type === 'LUMPSUM') && t.scheme !== 'EPS');
+  const pension = sum((t) => (t.type === 'SIP' || t.type === 'LUMPSUM') && t.scheme === 'EPS');
+  const interest = sum((t) => t.type === 'BONUS');
+  const withdrawn = sum((t) => t.type === 'REDEMPTION');
+  const cell = (t) => (t ? `${t.type === 'REDEMPTION' ? '−' : ''}${M(amountOf(t))}` : '<span class="muted">–</span>');
+  const body = epfGroups(txns)
+    .map((g) => {
+      const rate = g.entries.find((t) => isNum(t.rate))?.rate;
+      const note = g.entries.find((t) => t.notes)?.notes || '';
+      return `
+      <tr data-ids="${g.entries.map((t) => t.id).join(',')}">
+        <td>${fmtDate(g.date)}</td>
+        <td><span class="chip${CHIP_CLASS[g.type] || ''}">${KINDS.EPF.types[g.type] || g.type}</span></td>
+        <td class="num">${cell(g.shares.EE)}</td>
+        <td class="num">${cell(g.shares.ER)}</td>
+        <td class="num">${cell(g.shares.EPS)}</td>
+        <td class="num">${isNum(rate) ? `${rate}%` : '–'}</td>
+        <td class="comment-cell">${commentCell(note)}</td>
         <td class="row-actions"><button type="button" class="link-btn" data-edit>Edit</button><button type="button" class="link-btn danger-text" data-del>Delete</button></td>
-      </tr>`,
-    )
+      </tr>`;
+    })
     .join('');
+  const line = (v, label) => (v ? `${M(v)}<div class="muted small">${label}</div>` : '');
   return `
     <div class="table-wrap">
-      <table class="data">
-        <thead><tr><th>Date</th><th>Folio</th><th>Type</th><th class="num">Amount</th><th class="num">NAV</th><th class="num">Units</th><th></th></tr></thead>
+      <table class="data txn-table">
+        <thead><tr><th>Date</th><th>Type</th><th class="num">Employee</th><th class="num">Employer</th><th class="num">Pension (EPS)</th><th class="num">IR%</th><th>Comment</th><th></th></tr></thead>
         <tbody>${body}</tbody>
-        <tfoot><tr><td colspan="3">Total (${txns.length} transaction${txns.length === 1 ? '' : 's'})</td><td class="num">${fmtINR(totalAmount, 2)}</td><td></td><td class="num">${fmtNum(totalUnits, 4)}</td><td></td></tr></tfoot>
+        <tfoot><tr><td colspan="2">Total (${txns.length} entr${txns.length === 1 ? 'y' : 'ies'})</td><td class="num" colspan="2">${line(deposits, 'deposits (employee + employer)')}${line(interest, 'interest')}${line(withdrawn, 'withdrawn')}</td><td class="num">${line(pension, 'pension (EPS)')}</td><td colspan="3"></td></tr></tfoot>
       </table>
     </div>`;
 }
 
-async function renderFund(id) {
+function txnTable(txns, k, cur, { showScheme = false, epf = false } = {}) {
+  if (epf) return epfTxnTable(txns, cur);
+  const is = (t, ...types) => types.includes(t.type);
+  const M = (v, d = 0) => fmtMoney(v, cur, d);
+  const sum = (...types) => txns.filter((t) => is(t, ...types)).reduce((s, t) => s + t.amount, 0);
+  const totalAmount = sum('SIP', 'LUMPSUM');
+  const soldAmount = sum('REDEMPTION');
+  const divAmount = sum('DIVIDEND');
+  const switchedIn = sum('SWITCH_IN');
+  const switchedOut = sum('SWITCH_OUT');
+  const charges = sum('CHARGE');
+  const totalUnits = txns.reduce((s, t) => s + (is(t, 'REDEMPTION', 'SWITCH_OUT', 'CHARGE') ? -t.units : is(t, 'DIVIDEND') ? 0 : t.units), 0);
+  const body = txns
+    .map((tx) => {
+      const out = is(tx, 'REDEMPTION', 'SWITCH_OUT', 'CHARGE');
+      const plus = is(tx, 'BONUS', 'SWITCH_IN');
+      return `
+      <tr data-id="${tx.id}">
+        <td>${fmtDate(tx.date)}</td>
+        ${showScheme ? `<td><span class="chip">${esc(tx.scheme) || '–'}</span></td>` : `<td>${esc(tx.folio_number) || '–'}</td>`}
+        <td><span class="chip${CHIP_CLASS[tx.type] || ''}">${k.types[tx.type] || tx.type}</span></td>
+        <td class="num">${is(tx, 'BONUS') ? '–' : M(tx.amount, 2)}</td>
+        <td class="num">${tx.nav > 0 ? fmtNum(tx.nav, k.priceDecimals) : '–'}</td>
+        <td class="num">${is(tx, 'DIVIDEND') ? '–' : `${out ? '−' : plus ? '+' : ''}${fmtNum(tx.units, 4)}`}</td>
+        <td class="comment-cell">${commentCell(tx.notes)}</td>
+        <td class="row-actions"><button type="button" class="link-btn" data-edit>Edit</button><button type="button" class="link-btn danger-text" data-del>Delete</button></td>
+      </tr>`;
+    })
+    .join('');
+  const unitHead = k.unit[0].toUpperCase() + k.unit.slice(1);
+  const line = (v, label) => (v ? `${M(v, 2)}<div class="muted small">${label}</div>` : '');
+  return `
+    <div class="table-wrap">
+      <table class="data txn-table">
+        <thead><tr><th>Date</th><th>${showScheme ? 'Scheme' : k.folio}</th><th>Type</th><th class="num">Amount (${esc(cur)})</th><th class="num">${k.price}</th><th class="num">${unitHead}</th><th>Comment</th><th></th></tr></thead>
+        <tbody>${body}</tbody>
+        <tfoot><tr><td colspan="3">Total (${txns.length} transaction${txns.length === 1 ? '' : 's'})</td><td class="num">${line(totalAmount, showScheme ? 'contributed' : 'bought')}${line(soldAmount, k.sold)}${line(divAmount, 'dividends')}${line(switchedIn, 'switched in')}${line(switchedOut, 'switched out')}${line(charges, 'charges')}</td><td></td><td class="num">${fmtNum(totalUnits, 4)}<div class="muted small">held</div></td><td colspan="2"></td></tr></tfoot>
+      </table>
+    </div>`;
+}
+
+const NO_FOLIO = '(none)'; // server-side key for transactions with a blank folio
+
+function fundHash(id, folioKey, schemeKey) {
+  const p = new URLSearchParams();
+  if (folioKey) p.set('folio', folioKey);
+  if (schemeKey) p.set('scheme', schemeKey);
+  const qs = p.toString();
+  return qs ? `#/fund/${id}?${qs}` : `#/fund/${id}`;
+}
+
+/** NPS / EPF: chips to scope the page to one scheme (E / C / G ...) or share (employee / employer), or the whole account. */
+function schemeFilter(f, activeKey, labelOf = (p) => `Scheme ${esc(p.scheme)}`, title = 'Scheme') {
+  if (!f.schemes || f.schemes.length < 2) return '';
+  const btn = (key, label) =>
+    `<button type="button" class="range-btn${(activeKey || '') === key ? ' active' : ''}" data-scheme="${esc(key)}">${label}</button>`;
+  return `<div class="filter-bar"><span class="muted small">${title}</span>
+    <div class="range-filter folio-filter" role="group" aria-label="${title}">${btn('', 'Whole account')}${f.schemes.map((p) => btn(p.scheme, labelOf(p))).join('')}</div></div>`;
+}
+
+/** EPF: the four headline tiles (whole account or one share). */
+function epfTiles(s, activeScheme, M, f) {
+  const years = f.epf?.years || [];
+  const lastInterest = [...years].reverse().find((y) => y.interest_ee || y.interest_er);
+  const pending = f.epf?.pending_interest_fy;
+  const interest = isNum(s.interest) ? s.interest : s.bonus_units || 0;
+  if (activeScheme) {
+    return [
+      tile('Deposits', M(s.invested), `${activeScheme.name.toLowerCase()} only`),
+      tile('Interest credited', M(interest), lastInterest ? `up to FY ${lastInterest.fy}` : 'none entered yet'),
+      tile('XIRR', fmtPct(pct(s.xirr)), 'annualised, this share on its own'),
+      tile('Balance', M(s.current_value), `${M(s.invested)} deposited · ${M(interest)} interest`),
+    ].join('');
+  }
+  return [
+    tile('Deposits', M(s.invested), `employee ${M(s.deposits_employee)} · employer ${M(s.deposits_employer)}`),
+    tile('Interest credited', M(interest), [lastInterest ? `up to FY ${lastInterest.fy}${isNum(lastInterest.rate) ? ` at ${lastInterest.rate}%` : ''}` : 'none entered yet', pending ? `FY ${pending} pending` : ''].filter(Boolean).join(' · ')),
+    tile('XIRR', fmtPct(pct(s.xirr)), `on all deposits · ${fmtPct(pct(s.own_xirr))} on your own contributions`),
+    tile('Pension scheme (EPS)', M(s.pension_paid), 'paid in so far · not part of the balance'),
+  ].join('');
+}
+
+/** EPF: one row per financial year, balances worked out from deposits and the interest entered. */
+/**
+ * EPF: one stacked column per financial year - employee deposits, employer deposits and the interest credited
+ * for that year - following the Share filter (share = 'EE' | 'ER' | undefined for the whole account).
+ */
+function mountYearChart(f, share, currency) {
+  const canvas = document.getElementById('year-chart');
+  const years = f.epf?.years || [];
+  if (!canvas || !years.length) return;
+  const t = themeTokens();
+  const pending = f.epf?.pending_interest_fy;
+  const series = [
+    share !== 'ER' ? { label: 'Employee deposits', data: years.map((y) => y.deposit_ee), color: t.series1 } : null,
+    share !== 'EE' ? { label: 'Employer deposits', data: years.map((y) => y.deposit_er), color: t.series2 } : null,
+    {
+      label: 'Interest credited',
+      data: years.map((y) => (share === 'ER' ? 0 : y.interest_ee) + (share === 'EE' ? 0 : y.interest_er)),
+      color: t.series3,
+      placeholder: (i) => (years[i].fy === pending ? 'pending' : null),
+    },
+  ].filter(Boolean);
+  state.yearChart = stackedColumns(canvas, years.map((y) => `FY ${y.fy}`), series, { currency, totalLabel: 'Year total' });
+}
+
+function epfYearTable(f, cur) {
+  const years = f.epf?.years || [];
+  if (!years.length) return '';
+  const M = (v) => fmtMoney(v, cur);
+  const pending = f.epf?.pending_interest_fy;
+  const rows = years
+    .map(
+      (y) => `
+      <tr>
+        <td class="nowrap"><b>${esc(y.fy)}</b></td>
+        <td class="num">${M(y.deposit_ee)}</td>
+        <td class="num">${M(y.deposit_er)}</td>
+        <td class="num">${M(y.pension)}</td>
+        <td class="num">${isNum(y.rate) ? `${y.rate}%` : '–'}</td>
+        <td class="num">${y.interest_ee || y.interest_er ? `${M(y.interest_ee)} / ${M(y.interest_er)}` : pending === y.fy ? '<span class="muted">pending</span>' : '–'}</td>
+        <td class="num">${y.withdrawn_ee || y.withdrawn_er ? M(y.withdrawn_ee + y.withdrawn_er) : '–'}</td>
+        <td class="num">${M(y.closing_ee)}</td>
+        <td class="num">${M(y.closing_er)}</td>
+        <td class="num"><b>${M(y.closing_ee + y.closing_er)}</b></td>
+      </tr>`,
+    )
+    .join('');
+  return `
+    <section class="card">
+      <div class="card-head"><h2>By financial year</h2><span class="muted small">balances are worked out from the deposits and the interest you enter; interest is credited at the end of each year</span></div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>FY</th><th class="num">Employee deposits</th><th class="num">Employer deposits</th><th class="num">Pension (EPS)</th><th class="num">IR%</th><th class="num">Interest (employee / employer)</th><th class="num">Withdrawn</th><th class="num">Closing employee</th><th class="num">Closing employer</th><th class="num">Closing balance</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+/** NPS: one row per scheme, each valued at its own NAV, with the whole account in the footer. */
+function schemeTable(f, activeKey, cur) {
+  if (!f.schemes || !f.schemes.length) return '';
+  const M = (v) => fmtMoney(v, cur);
+  const rows = f.schemes
+    .map((p) => {
+      const s = p.summary;
+      return `
+      <tr class="row-link${activeKey === p.scheme ? ' active-row' : ''}" data-scheme="${esc(p.scheme)}" tabindex="0">
+        <td><div class="fund-name"><span class="chip">${esc(p.scheme)}</span> ${esc(SCHEME_NAMES[p.scheme] || `Scheme ${p.scheme}`)}</div><div class="muted small">${esc(p.name)}${p.id ? ` · ${esc(p.id)}` : ''}</div></td>
+        <td class="num">${s.txn_count}</td>
+        <td class="num">${M(s.invested)}</td>
+        <td class="num">${fmtNum(s.units, 4)}</td>
+        <td class="num">${isNum(s.latest_nav) ? fmtNum(s.latest_nav, 4) : '–'}</td>
+        <td class="num">${M(s.current_value)}</td>
+        <td class="num">${deltaValue(s.invested ? s.profit : null, cur)}<div class="muted small">${fmtPct(s.abs_return_pct)}${s.charges ? ` · ${M(s.charges)} charges` : ''}</div></td>
+        <td class="num">${fmtPct(pct(s.xirr))}</td>
+      </tr>`;
+    })
+    .join('');
+  const t = f.schemes_total;
+  return `
+    <section class="card">
+      <div class="card-head"><h2>By scheme</h2><span class="muted small">click a scheme to filter the page · a scheme's XIRR counts money switched in or out of it; the account XIRR only your own contributions and withdrawals</span></div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Scheme</th><th class="num">Transactions</th><th class="num">Invested</th><th class="num">Units</th><th class="num">NAV</th><th class="num">Current value</th><th class="num">P&amp;L</th><th class="num">XIRR</th></tr></thead>
+          <tbody>${rows}</tbody>
+          <tfoot><tr><td>Whole account</td><td class="num">${t.txn_count}</td><td class="num">${M(t.invested)}</td><td class="num">–</td><td class="num">–</td><td class="num">${M(t.current_value)}</td><td class="num">${deltaValue(t.invested ? t.profit : null, cur)}${t.charges ? `<div class="muted small">${M(t.charges)} charges</div>` : ''}</td><td class="num">${fmtPct(pct(t.xirr))}</td></tr></tfoot>
+        </table>
+      </div>
+    </section>`;
+}
+
+function folioFilter(f, activeKey, k) {
+  if (!f.folios || f.folios.length < 2) return '';
+  const btn = (key, label) =>
+    `<button type="button" class="range-btn${(activeKey || '') === key ? ' active' : ''}" data-folio="${esc(key)}">${label}</button>`;
+  return `<div class="filter-bar"><span class="muted small">${k.folio}</span>
+    <div class="range-filter folio-filter" role="group" aria-label="${k.folio}">${btn('', `All ${k.folioPlural}`)}${f.folios.map((x) => btn(x.folio, esc(x.label))).join('')}</div></div>`;
+}
+
+function folioTable(f, activeKey, k, cur) {
+  if (!f.folios || f.folios.length < 2) return '';
+  const M = (v) => fmtMoney(v, cur);
+  const rows = f.folios
+    .map((x) => {
+      const s = x.summary;
+      return `
+      <tr class="row-link${activeKey === x.folio ? ' active-row' : ''}" data-folio="${esc(x.folio)}" tabindex="0">
+        <td><div class="fund-name">${esc(x.label)}</div></td>
+        <td class="num">${s.txn_count}</td>
+        <td class="num">${M(s.invested)}</td>
+        <td class="num">${fmtNum(s.units, 3)}</td>
+        <td class="num">${M(s.current_value)}</td>
+        <td class="num">${deltaValue(s.invested ? s.profit : null, cur)}<div class="muted small">${fmtPct(s.abs_return_pct)}</div></td>
+        <td class="num">${fmtPct(pct(s.xirr))}</td>
+      </tr>`;
+    })
+    .join('');
+  const t = f.folios_total;
+  const unitHead = k.unit[0].toUpperCase() + k.unit.slice(1);
+  return `
+    <section class="card">
+      <div class="card-head"><h2>By ${k.folio.toLowerCase()}</h2><span class="muted small">click a${k.key === 'STOCK' ? 'n' : ''} ${k.folio.toLowerCase()} to filter the page</span></div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>${k.folio}</th><th class="num">Transactions</th><th class="num">Invested</th><th class="num">${unitHead}</th><th class="num">Current value</th><th class="num">P&amp;L</th><th class="num">XIRR</th></tr></thead>
+          <tbody>${rows}</tbody>
+          <tfoot><tr><td>All ${k.folioPlural}</td><td class="num">${t.txn_count}</td><td class="num">${M(t.invested)}</td><td class="num">${fmtNum(t.units, 3)}</td><td class="num">${M(t.current_value)}</td><td class="num">${deltaValue(t.invested ? t.profit : null, cur)}</td><td class="num">${fmtPct(pct(t.xirr))}</td></tr></tfoot>
+        </table>
+      </div>
+    </section>`;
+}
+
+async function renderFund(id, folioKey, schemeKey) {
   app.innerHTML = loading();
-  const f = await api.get(`/api/funds/${id}`);
+  const params = new URLSearchParams();
+  if (folioKey) params.set('folio', folioKey);
+  if (schemeKey) params.set('scheme', schemeKey);
+  const f = await api.get(`/api/funds/${id}${params.toString() ? `?${params}` : ''}`);
+  BASE = f.base_currency || BASE;
+  const k = kindOf(f);
+  const stock = k.key === 'STOCK';
+  const nps = k.key === 'NPS';
+  const epf = k.key === 'EPF';
+  const cur = f.currency || BASE;
+  const foreign = Boolean(f.needs_fx);
+  const b = foreign ? f.base : null; // converted figures, when an exchange rate is available
+  const bs = b?.summary;
+  const M = (v, d = 0) => fmtMoney(v, cur, d);
+  const folios = f.folios || [];
+  const schemes = f.schemes || [];
+  const active = folioKey ? folios.find((x) => x.folio === folioKey) : null;
+  if (folioKey && !active) { location.hash = fundHash(id); return; } // stale filter (folio no longer exists)
+  const activeScheme = (nps || epf) && schemeKey ? schemes.find((p) => p.scheme === schemeKey) : null;
+  if (schemeKey && !activeScheme) { location.hash = fundHash(id, folioKey); return; }
+  const scope = `${active ? ` · ${k.folio} ${esc(active.label)}` : ''}${activeScheme ? ` · ${epf ? esc(activeScheme.name) : `Scheme ${esc(activeScheme.scheme)}`}` : ''}`;
   const s = f.summary;
-  const meta = [
-    f.folio_number ? `Folio <b>${esc(f.folio_number)}</b>` : '',
-    `Scheme code <b>${f.scheme_code}</b>`,
-    f.scheme?.fund_house ? esc(f.scheme.fund_house) : '',
-    f.scheme?.scheme_category ? esc(f.scheme.scheme_category) : '',
-  ].filter(Boolean).join(' · ');
+  const d = f.details || {};
+  const folioText = folios.length > 1
+    ? `${folios.length} ${k.folioPlural} <b>${folios.map((x) => esc(x.label)).join(', ')}</b>`
+    : folios.length === 1
+      ? `${k.folio} <b>${esc(folios[0].label)}</b>`
+      : f.folio_number ? `${k.folio} <b>${esc(f.folio_number)}</b>` : '';
+  const meta = (epf
+    ? [
+        f.folio_number ? `UAN <b>${esc(f.folio_number)}</b>` : folioText,
+        d.employer ? esc(d.employer) : '',
+        isNum(f.summary?.balance_employee) && !d.transferred_to ? `employee ${M(f.summary.balance_employee)} · employer ${M(f.summary.balance_employer)}` : '',
+        d.transferred_from ? `continued from <a href="#/fund/${Number(d.transferred_from)}">${esc(d.transferred_from_name || 'the previous account')}</a>${d.transferred_on ? ` on ${fmtDate(d.transferred_on)}` : ''}` : '',
+        d.transferred_to ? `balance moved to <a href="#/fund/${Number(d.transferred_to)}">${esc(d.transferred_to_name || 'the new account')}</a>${d.transferred_on ? ` on ${fmtDate(d.transferred_on)}` : ''}` : '',
+      ]
+    : nps
+    ? [
+        f.folio_number ? `PRAN <b>${esc(f.folio_number)}</b>` : folioText,
+        d.pfm ? esc(d.pfm) : '',
+        d.tier ? `Tier ${esc(d.tier)}` : '',
+        d.variant ? esc(d.variant) : '',
+        schemes.length ? `Schemes <b>${schemes.map((p) => esc(p.scheme)).join(' · ')}</b>` : '',
+      ]
+    : stock
+      ? [
+          `Symbol <b>${esc(f.symbol)}</b>`,
+          f.exchange ? esc(f.exchange) : '',
+          `prices in <b>${esc(cur)}</b>`,
+          f.quote?.name && f.quote.name !== f.name ? esc(f.quote.name) : '',
+          folioText,
+        ]
+      : [
+          folioText,
+          `Scheme code <b>${f.scheme_code}</b>`,
+          f.scheme?.fund_house ? esc(f.scheme.fund_house) : '',
+          f.scheme?.scheme_category ? esc(f.scheme.scheme_category) : '',
+        ]).filter(Boolean).join(' · ');
+  // Forms default to the folio / scheme being viewed; duplicate checks always see every transaction.
+  const fundForForms = {
+    ...f,
+    folio_number: active ? (active.folio === NO_FOLIO ? '' : active.folio) : f.folio_number,
+    scheme: activeScheme?.scheme || '',
+    transactions: f.all_transactions || f.transactions,
+  };
+  const inBase = (v) => (b ? `≈ ${fmtINR(v)}` : '');
 
   app.innerHTML = `
     ${navErrorBanner(f.nav_errors)}
+    ${foreign && !b ? `<div class="banner warn">No ${esc(cur)} → ${esc(BASE)} exchange rate has been downloaded yet, so ${esc(BASE)} equivalents are not shown and this holding is left out of the portfolio totals. Click <b>Refresh prices</b> when you are online.</div>` : ''}
+    ${s.oversold_units > 0 ? `<div class="banner warn">${epf ? 'Withdrawals exceed the balance' : `Sales exceed the ${k.unit} bought`} by ${epf ? M(s.oversold_units, 2) : fmtNum(s.oversold_units, 4)}. Check the transactions${active ? ` in this ${k.folio.toLowerCase()}` : ''}: a ${epf ? 'withdrawal' : 'sale'} may be recorded before its ${epf ? 'deposit' : 'purchase'}, or against the wrong ${k.lower}.</div>` : ''}
+    ${epf && f.epf?.pending_interest_fy ? `<div class="banner warn">Interest for FY ${esc(f.epf.pending_interest_fy)} has not been entered yet, so the balance shows deposits only for that year. Add it with <b>Year interest</b> once EPFO credits it.</div>` : ''}
+    ${epf && d.transferred_to ? `<div class="banner">You changed jobs${d.transferred_on ? ` on ${fmtDate(d.transferred_on)}` : ''}: the employee and employer shares, with their whole history, now live in <a href="#/fund/${Number(d.transferred_to)}">${esc(d.transferred_to_name || 'the new account')}</a>. Only the pension (EPS) record stays here.</div>` : ''}
     <a class="back-link" href="#/">← Portfolio</a>
     <div class="page-head">
       <div>
-        <h1>${esc(f.name)} ${statusBadge(f.locked, f.lock_in_until)}</h1>
-        <div class="meta muted small">${meta}</div>
+        <h1>${esc(f.name)} ${statusBadge(f)}</h1>
+        <div class="meta muted small">${kindChip(f)}${meta}</div>
         ${f.notes ? `<div class="notes">${esc(f.notes)}</div>` : ''}
       </div>
       <div class="head-actions">
-        <button type="button" class="btn ghost small" id="btn-edit-fund">Edit fund</button>
+        ${!epf && !f.closed && s.units > 0 ? `<button type="button" class="btn ghost small" id="btn-exit" title="Sell everything you hold${active ? ` in this ${k.folio.toLowerCase()}` : ''}${activeScheme ? ` in scheme ${esc(activeScheme.scheme)}` : ''} and close the position">Exit${activeScheme ? ` scheme ${esc(activeScheme.scheme)}` : ''}</button>` : ''}
+        ${epf && !d.transferred_to && f.transactions.length ? '<button type="button" class="btn ghost small" id="btn-epf-transfer" title="Changed jobs? Move the balance and its history to a new account under the same UAN">Moved jobs</button>' : ''}
+        <button type="button" class="btn ghost small" id="btn-edit-fund">Edit ${k.lower}</button>
         <button type="button" class="btn ghost small danger-text" id="btn-delete-fund">Delete</button>
       </div>
     </div>
+    ${nps ? schemeFilter(f, schemeKey) : epf ? schemeFilter(f, schemeKey, (p) => esc(p.name), 'Share') : folioFilter(f, folioKey, k)}
     <section class="summary-grid">
-      ${hero('Current value', s.current_value, s.invested ? s.profit : null, s.abs_return_pct)}
-      <div class="tiles">
-        ${tile('Total investment', fmtINR(s.invested))}
-        ${tile('Total profit', deltaValue(s.invested ? s.profit : null), isNum(s.abs_return_pct) ? `${fmtPct(s.abs_return_pct)} absolute` : '')}
-        ${tile('XIRR', fmtPct(pct(s.xirr)), 'annualised')}
-        ${tile('Latest NAV', isNum(s.latest_nav) ? fmtNum(s.latest_nav, 4) : '–', s.latest_nav_date ? `as of ${fmtDate(s.latest_nav_date)} · ${fmtNum(s.units, 3)} units held` : 'NAV not fetched yet')}
+      ${hero({
+        label: `${epf ? 'Current balance' : 'Current value'}${scope}`, value: s.current_value, profit: s.invested ? s.profit : null, absPct: s.abs_return_pct,
+        realised: epf ? 0 : s.realised_gain, dividends: s.dividends, currency: cur, realisedWhat: k.realisedWhat || 'from sales',
+        approx: b ? `≈ ${fmtINR(bs.current_value)} · 1 ${esc(cur)} = ${fmtINR(b.rate, 2)} on ${fmtDate(b.rate_date)}` : '',
+      })}
+      <div class="tiles">${epf ? epfTiles(s, activeScheme, M, f) : ''}
+        ${epf ? '' : tile(s.redeemed ? 'Investment in holdings' : 'Total investment', M(s.invested), [s.redeemed ? `${M(s.purchased)} ${nps ? 'contributed' : 'bought'} · ${M(s.redeemed)} ${k.sold}` : '', s.charges ? `${M(s.charges)} deducted as charges` : '', netOfDividends(s, M), s.bonus_units ? `${fmtNum(s.bonus_units, 4)} bonus ${k.unit} at no cost` : '', inBase(bs?.invested)].filter(Boolean).join(' · '))}
+        ${epf ? '' : tile(s.redeemed || s.dividends ? 'Unrealised profit' : 'Total profit', deltaValue(s.invested ? s.profit : null, cur), [isNum(s.abs_return_pct) ? `${fmtPct(s.abs_return_pct)} absolute` : '', realisedText(s, M, k.realisedWhat || 'from sales'), b && s.invested ? `${inBase(bs.profit)} in ${esc(BASE)}` : ''].filter(Boolean).join(' · '))}
+        ${epf ? '' : tile('XIRR', fmtPct(pct(s.xirr)), b ? `annualised in ${esc(cur)} · ${fmtPct(pct(bs.xirr))} in ${esc(BASE)}` : nps ? (activeScheme ? `annualised, scheme ${esc(activeScheme.scheme)} on its own` : 'annualised, whole account, on your own contributions') : 'annualised')}
+        ${epf ? '' : nps && !activeScheme
+          ? tile('Latest NAVs', schemes.map((p) => `<span class="scheme-nav"><span class="chip">${esc(p.scheme)}</span>${isNum(p.summary.latest_nav) ? fmtNum(p.summary.latest_nav, 2) : '–'}</span>`).join(''), s.latest_nav_date ? `as of ${fmtDate(s.latest_nav_date)} · ${schemes.length} scheme${schemes.length === 1 ? '' : 's'}` : 'NAVs not fetched yet')
+          : tile(`Latest ${k.price}`, isNum(s.latest_nav) ? M(s.latest_nav, k.priceDecimals) : '–', s.latest_nav_date ? `as of ${fmtDate(s.latest_nav_date)} · ${fmtNum(s.units, 3)} ${k.unit} held` : `${k.price} not fetched yet`)}
       </div>
     </section>
+    ${nps ? schemeTable(f, schemeKey, cur) : epf ? epfYearTable(f, cur) : folioTable(f, folioKey, k, cur)}
+    ${epf && f.epf?.years?.length ? `<section class="card chart-card">
+      <div class="card-head"><h2>Deposits and interest by year${scope}</h2><span class="muted small">one column per financial year: employee deposits, employer deposits and the interest credited for that year</span></div>
+      <div class="chart-wrap short"><canvas id="year-chart" role="img" aria-label="Employee deposits, employer deposits and interest credited per financial year for ${esc(f.name)}${activeScheme ? `, ${esc(activeScheme.name)}` : ''}"></canvas></div>
+    </section>` : ''}
     <section class="card chart-card">
-      <div class="card-head"><h2>Value over time</h2>${rangeButtons()}</div>
-      <div class="chart-wrap"><canvas id="value-chart" role="img" aria-label="Current value and invested amount of ${esc(f.name)} over time"></canvas></div>
+      <div class="card-head"><h2>${epf ? 'Balance over time' : 'Value over time'}${scope}${foreign ? ` <span class="muted small">in ${esc(cur)}</span>` : ''}</h2>${rangeButtons()}</div>
+      <div class="chart-wrap"><canvas id="value-chart" role="img" aria-label="Current value and invested amount of ${esc(f.name)}${active ? ` ${k.folio.toLowerCase()} ${esc(active.label)}` : ''} over time"></canvas></div>
     </section>
     <section class="card">
-      <div class="card-head"><h2>Transactions</h2><button type="button" class="btn primary small" id="btn-add-txn">+ Add transaction</button></div>
-      ${f.transactions.length ? txnTable(f.transactions) : '<p class="empty">No transactions yet. Add your SIP installments or lumpsum purchases to see value and returns.</p>'}
+      <div class="card-head"><h2>Transactions${scope}</h2>
+        <div class="head-actions">
+          <button type="button" class="btn ghost small" id="btn-import-txn">${epf ? 'Import a year' : 'Import'}</button>
+          ${epf ? '<button type="button" class="btn ghost small" id="btn-epf-interest">Year interest</button><button type="button" class="btn ghost small" id="btn-epf-month">+ Add month</button>' : ''}
+          <button type="button" class="btn primary small" id="btn-add-txn">${epf ? '+ Add entry' : '+ Add transaction'}</button>
+        </div>
+      </div>
+      ${f.transactions.length
+        ? txnTable(f.transactions, k, cur, { showScheme: nps, epf })
+        : active || activeScheme
+          ? `<p class="empty">No ${epf ? 'entries' : 'transactions'} in this ${activeScheme ? (epf ? 'share' : 'scheme') : k.folio.toLowerCase()}.</p>`
+          : `<p class="empty">No ${epf ? 'entries' : 'transactions'} yet. ${epf ? 'Paste a financial year from your sheet with Import a year, or add months one at a time; enter each year\'s interest when EPFO credits it' : nps ? 'Add contributions one at a time, or paste your eNPS transaction statement with Import (one row per contribution, with units and NAV per scheme)' : stock ? 'Add purchases and sales one at a time, or use Import to paste a whole table' : 'Add SIP installments, lumpsum purchases or redemptions one at a time, or use Import to paste a whole table'}.</p>`}
     </section>`;
 
-  mountChart(f.history);
+  mountChart(f.history, cur);
+  if (epf) mountYearChart(f, activeScheme?.scheme, cur);
   wireRange(app);
 
-  document.getElementById('btn-add-txn').addEventListener('click', () => openTxnModal(f, null));
+  app.querySelectorAll('[data-folio]').forEach((el) => {
+    const go = () => { location.hash = fundHash(f.id, el.dataset.folio, schemeKey); };
+    el.addEventListener('click', go);
+    if (el.tagName === 'TR') el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+  });
+  app.querySelectorAll('[data-scheme]').forEach((el) => {
+    const go = () => { location.hash = fundHash(f.id, folioKey, el.dataset.scheme); };
+    el.addEventListener('click', go);
+    if (el.tagName === 'TR') el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+  });
+
+  document.getElementById('btn-add-txn').addEventListener('click', () => openTxnModal(fundForForms, null));
+  document.getElementById('btn-epf-month')?.addEventListener('click', () => { const n = new Date(); openEpfGroupModal(fundForForms, { type: 'SIP', date: `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-15` }); });
+  document.getElementById('btn-epf-interest')?.addEventListener('click', () => openEpfInterestModal(fundForForms));
+  document.getElementById('btn-epf-transfer')?.addEventListener('click', () => openEpfTransferModal(f));
+  document.getElementById('btn-exit')?.addEventListener('click', () => openTxnModal(fundForForms, null, { exitUnits: s.units, folios: folios.length, scoped: Boolean(active), scheme: activeScheme?.scheme || '' }));
+  document.getElementById('btn-import-txn').addEventListener('click', () => openImportModal(fundForForms, render));
   document.getElementById('btn-edit-fund').addEventListener('click', () => openFundModal(f));
   document.getElementById('btn-delete-fund').addEventListener('click', async () => {
-    const ok = await confirmDialog('Delete fund?', `This removes <b>${esc(f.name)}</b> and all ${f.transactions.length} of its transactions. This cannot be undone.`);
+    const ok = await confirmDialog(`Delete ${k.lower}?`, `This removes <b>${esc(f.name)}</b> and all ${f.transactions.length} of its transactions. This cannot be undone.`);
     if (!ok) return;
     try {
       await api.del(`/api/funds/${f.id}`);
-      toast('Fund deleted');
+      toast(`${k.label} deleted`);
       location.hash = '#/';
     } catch (e) {
       toast(`Delete failed: ${e.message}`, 'error');
     }
   });
 
-  app.querySelector('tbody')?.addEventListener('click', async (e) => {
+  app.querySelector('.txn-table tbody')?.addEventListener('click', async (e) => {
+    const grp = e.target.closest('tr[data-ids]');
+    if (grp) {
+      const entries = grp.dataset.ids.split(',').map(Number).map((id) => f.transactions.find((t) => t.id === id)).filter(Boolean);
+      if (!entries.length) return;
+      if (e.target.closest('.comment-text, .comment-add')) { startCommentEdit(e.target.closest('td'), entries[0], entries.slice(1)); return; }
+      if (e.target.closest('[data-edit]')) openEpfGroupModal(fundForForms, { entries });
+      if (e.target.closest('[data-del]')) {
+        const ok = await confirmDialog('Delete this row?', `${KINDS.EPF.types[entries[0].type] || entries[0].type} of ${fmtDate(entries[0].date)} (${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}) will be removed.`);
+        if (!ok) return;
+        try {
+          await Promise.all(entries.map((t) => api.del(`/api/transactions/${t.id}`)));
+          toast('Row deleted');
+          render();
+        } catch (err) {
+          toast(`Delete failed: ${err.message}`, 'error');
+        }
+      }
+      return;
+    }
     const tr = e.target.closest('tr[data-id]');
     if (!tr) return;
     const tx = f.transactions.find((t) => t.id === Number(tr.dataset.id));
     if (!tx) return;
+    if (e.target.closest('.comment-text, .comment-add')) { startCommentEdit(e.target.closest('td'), tx); return; }
     if (e.target.closest('[data-edit]')) openTxnModal(f, tx);
     if (e.target.closest('[data-del]')) {
-      const ok = await confirmDialog('Delete transaction?', `${tx.type === 'SIP' ? 'SIP' : 'Lumpsum'} of ${fmtINR(tx.amount, 2)} on ${fmtDate(tx.date)} will be removed.`);
+      const what = tx.type === 'BONUS' ? (epf ? `${k.types.BONUS} of ${M(tx.units, 2)}` : `${k.types.BONUS}: ${fmtNum(tx.units, 4)} ${k.unit}`) : `${k.types[tx.type] || tx.type} of ${M(tx.amount, 2)}`;
+      const ok = await confirmDialog('Delete transaction?', `${what} on ${fmtDate(tx.date)} will be removed.`);
       if (!ok) return;
       try {
         await api.del(`/api/transactions/${tx.id}`);
@@ -350,29 +1013,121 @@ async function renderFund(id) {
 
 // ---------------------------------------------------------------- fund add / edit modal
 function fundFormHtml(f) {
+  const editing = Boolean(f.id);
+  const k = kindOf(f);
+  const stock = k.key === 'STOCK';
+  const nps = k.key === 'NPS';
+  const epf = k.key === 'EPF';
+  const d = f.details || {};
+  const txnCount = f.summary?.txn_count ?? 0;
+  const schemeName = f.scheme?.scheme_name || (f.scheme_code ? `Scheme code ${f.scheme_code}` : '');
+  const schemeMeta = [f.scheme?.fund_house, f.scheme?.scheme_category].filter(Boolean).join(' · ');
+  const quoteName = f.quote?.name || '';
+  const quoteMeta = [f.symbol, f.exchange, f.currency ? `prices in ${f.currency}` : ''].filter(Boolean).join(' · ');
   return `
   <form id="fund-form" class="form" novalidate>
-    <label class="field">Search scheme
-      <input name="q" placeholder="Type a fund name, e.g. Parag Parikh Flexi Cap Direct Growth" autocomplete="off">
-      <span class="hint">Searches the AMFI scheme list. Pick the exact plan: Direct / Regular, Growth / IDCW.</span>
-    </label>
-    <div id="scheme-results" class="search-results" hidden></div>
-    <div class="form-row">
+    ${editing ? '' : `
+    <div class="field">What are you adding?
+      <div class="kind-toggle" role="radiogroup" aria-label="Kind of holding">
+        <label><input type="radio" name="kind" value="MF" checked> Mutual fund</label>
+        <label><input type="radio" name="kind" value="STOCK"> Stock / ETF</label>
+        <label><input type="radio" name="kind" value="NPS"> NPS</label>
+        <label><input type="radio" name="kind" value="EPF"> EPF</label>
+      </div>
+    </div>`}
+    <div id="mf-fields" ${k.key !== 'MF' ? 'hidden' : ''}>
+      ${editing ? `
+      <div class="field">Linked AMFI scheme
+        <div class="scheme-box">
+          <div class="scheme-info">
+            <div class="scheme-name" id="scheme-name">${esc(schemeName)}</div>
+            <div class="muted small" id="scheme-meta">${esc(schemeMeta)}${f.scheme_code ? `${schemeMeta ? ' · ' : ''}code ${f.scheme_code}` : ''}</div>
+          </div>
+          <button type="button" class="btn ghost small" id="btn-change-scheme">Change scheme</button>
+        </div>
+        <div class="banner warn small" id="scheme-change-note" hidden></div>
+      </div>` : ''}
+      <div id="scheme-search" ${editing ? 'hidden' : ''}>
+        <label class="field">${editing ? 'Search for the correct scheme' : 'Search scheme'}
+          <input name="q" placeholder="Type a fund name, e.g. Parag Parikh Flexi Cap Direct Growth" autocomplete="off">
+          <span class="hint">Searches the AMFI scheme list. Pick the exact plan: Direct / Regular, Growth / IDCW. Some fund houses label Growth as "Cumulative".</span>
+        </label>
+        <div id="scheme-results" class="search-results" hidden></div>
+      </div>
       <label class="field">Scheme code (AMFI)
-        <input name="scheme_code" required inputmode="numeric" pattern="[0-9]+" value="${f.scheme_code ?? ''}" placeholder="e.g. 122639">
-      </label>
-      <label class="field">Folio number
-        <input name="folio_number" value="${esc(f.folio_number ?? '')}" placeholder="e.g. 1234567/89">
+        <input name="scheme_code" inputmode="numeric" pattern="[0-9]+" value="${f.scheme_code ?? ''}" placeholder="e.g. 122639">
       </label>
     </div>
-    <label class="field">Display name
-      <input name="name" required value="${esc(f.name ?? '')}" placeholder="Shown in your portfolio">
+    <div id="stock-fields" ${stock ? '' : 'hidden'}>
+      ${editing ? `
+      <div class="field">Linked stock
+        <div class="scheme-box">
+          <div class="scheme-info">
+            <div class="scheme-name" id="stock-name">${esc(quoteName || f.symbol || '')}</div>
+            <div class="muted small" id="stock-meta">${esc(quoteMeta)}</div>
+          </div>
+          <button type="button" class="btn ghost small" id="btn-change-symbol">Change symbol</button>
+        </div>
+        <div class="banner warn small" id="symbol-change-note" hidden></div>
+      </div>` : ''}
+      <div id="stock-search" ${editing ? 'hidden' : ''}>
+        <label class="field">${editing ? 'Search for the correct stock' : 'Search stock or ETF'}
+          <input name="q_stock" placeholder="Company name or ticker, e.g. Reliance, Acme, AAPL" autocomplete="off">
+          <span class="hint">Any exchange, any currency. Indian shares appear as NSE (.NS) and BSE (.BO) listings; pick the one you hold. Prices are tracked in the exchange's currency and the portfolio converts them to ${esc(BASE)} daily.</span>
+        </label>
+        <div id="stock-results" class="search-results" hidden></div>
+      </div>
+      <label class="field">Symbol
+        <input name="symbol" value="${esc(f.symbol ?? '')}" placeholder="e.g. RELIANCE.NS, ALL.AX, AAPL" autocapitalize="characters" autocomplete="off">
+        <span class="hint" id="symbol-hint">${quoteName ? esc(`${quoteName} · ${quoteMeta}`) : 'Pick a search result, or type the symbol used by Yahoo Finance'}</span>
+      </label>
+    </div>
+    <div id="nps-fields" ${nps ? '' : 'hidden'}>
+      <div class="form-row">
+        <label class="field">Pension fund manager
+          <select name="nps_pfm"><option value="">Loading…</option></select>
+        </label>
+        <label class="field">Tier
+          <select name="nps_tier">
+            <option value="I" ${d.tier !== 'II' ? 'selected' : ''}>Tier I (retirement account)</option>
+            <option value="II" ${d.tier === 'II' ? 'selected' : ''}>Tier II (voluntary)</option>
+          </select>
+        </label>
+      </div>
+      <label class="field">Scheme variant
+        <select name="nps_variant"><option value="">Standard</option></select>
+        <span class="hint">Most accounts use the standard schemes. GS, Direct and POP variants exist for newer accounts; pick what your eNPS statement shows.</span>
+      </label>
+      <div class="field">Schemes in this account
+        <div id="nps-schemes" class="radio-row"></div>
+        <span class="hint" id="nps-status">NAVs come from NPS Trust, one series per scheme. Untick a scheme you do not invest in.</span>
+      </div>
+    </div>
+    <div id="epf-fields" ${epf ? '' : 'hidden'}>
+      <label class="field">Employer (optional)
+        <input name="epf_employer" value="${esc(d.employer ?? '')}" placeholder="e.g. Acme">
+        <span class="hint">Your EPF balance is deposits plus the interest EPFO credits each year. You enter both (a financial year at a time from your sheet, or month by month); nothing is looked up online. The employer's pension-scheme (EPS) share is tracked separately and is not part of the balance.</span>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field"><span id="folio-label">${epf ? 'UAN' : nps ? 'PRAN' : stock ? 'Default account (optional)' : 'Default folio number'}</span>
+        <input name="folio_number" value="${esc(f.folio_number ?? '')}" placeholder="${epf ? 'e.g. 100123456789' : nps ? 'e.g. 110012345678' : stock ? 'e.g. Zerodha, ESPP, demat no.' : 'e.g. 1234567/89'}">
+        <span class="hint" id="folio-hint">${epf ? 'Your Universal Account Number (optional).' : nps ? 'Your Permanent Retirement Account Number (optional).' : stock ? 'Broker or demat account; each transaction can carry its own.' : 'Pre-filled on new transactions; each transaction can still carry its own folio.'}</span>
+      </label>
+      <label class="field">Display name
+        <input name="name" required value="${esc(f.name ?? '')}" placeholder="Shown in your portfolio">
+        ${editing ? `<span class="hint"><button type="button" class="link-btn" id="btn-use-scheme-name">Use the ${stock ? 'company' : 'scheme'} name</button></span>` : ''}
+      </label>
+    </div>
+    <label class="check" id="apply-folio-wrap" hidden>
+      <input type="checkbox" name="apply_folio">
+      <span>Also change the ${stock ? 'account' : 'folio'} on the <b id="apply-folio-count">0</b> existing transaction(s) that use the old one</span>
     </label>
     <fieldset class="field">
       <legend>Status</legend>
       <div class="radio-row">
-        <label><input type="radio" name="locked" value="0" ${f.locked ? '' : 'checked'}> Open — can be redeemed</label>
-        <label><input type="radio" name="locked" value="1" ${f.locked ? 'checked' : ''}> Locked — under lock-in (e.g. ELSS)</label>
+        <label><input type="radio" name="locked" value="0" ${f.locked ? '' : 'checked'}> Open — can be sold / redeemed</label>
+        <label><input type="radio" name="locked" value="1" ${f.locked ? 'checked' : ''}> Locked — under lock-in (e.g. ELSS, vesting, ESPP holding period)</label>
       </div>
     </fieldset>
     <label class="field" id="lock-until-field" ${f.locked ? '' : 'hidden'}>Locked until (optional)
@@ -381,24 +1136,144 @@ function fundFormHtml(f) {
     <label class="field">Notes
       <input name="notes" value="${esc(f.notes ?? '')}" placeholder="Optional">
     </label>
+    ${editing && txnCount ? `<p class="muted small">Your ${txnCount} transaction${txnCount === 1 ? '' : 's'} stay exactly as recorded. Changing the ${stock ? 'symbol' : 'scheme'} only changes which price history is used to value them.</p>` : ''}
     <div class="form-error" id="fund-form-error" hidden></div>
     <div class="form-actions">
       <button type="button" class="btn ghost" data-close>Cancel</button>
-      <button type="submit" class="btn primary">${f.id ? 'Save changes' : 'Add fund'}</button>
+      <button type="submit" class="btn primary">${editing ? 'Save changes' : 'Add'}</button>
     </div>
   </form>`;
 }
 
-function openFundModal(existing) {
-  const modal = openModal(existing ? 'Edit fund' : 'Add mutual fund', fundFormHtml(existing || {}));
+async function openFundModal(existing) {
+  // From the portfolio page we only have the summary row; fetch the full fund so the dialog knows its source and transactions.
+  if (existing?.id && !existing.transactions) {
+    try {
+      existing = await api.get(`/api/funds/${existing.id}`);
+    } catch (e) {
+      toast(`Could not load: ${e.message}`, 'error');
+      return;
+    }
+  }
+  const editing = Boolean(existing?.id);
+  let kind = KINDS[existing?.kind] ? existing.kind : 'MF';
+  const modal = openModal(editing ? `Edit ${KINDS[kind].lower}` : 'Add a mutual fund, stock or NPS account', fundFormHtml(existing || {}));
   const form = modal.querySelector('#fund-form');
+  const nameInput = form.elements.name;
+  const folioInput = form.elements.folio_number;
+  const codeInput = form.elements.scheme_code;
+  const symbolInput = form.elements.symbol;
+  const original = {
+    code: existing?.scheme_code ?? null,
+    symbol: existing?.symbol ?? '',
+    folio: existing?.folio_number ?? '',
+    schemeName: existing?.scheme?.scheme_name || '',
+    stockName: existing?.quote?.name || '',
+  };
+  const allTx = editing ? existing.all_transactions || existing.transactions || [] : [];
+  const oldFolioTxns = allTx.filter((t) => (t.folio_number || '') === original.folio).length;
+  let selected = { code: original.code, name: original.schemeName }; // AMFI scheme picked from the search
+  let stockInfo = original.symbol ? { symbol: original.symbol, name: original.stockName, currency: existing?.currency, exchange: existing?.exchange } : null;
+  let nameEdited = editing;
+  const err = modal.querySelector('#fund-form-error');
+
+  // ---- NPS: pension fund manager, tier, variant and the schemes (E / C / G / A) with their NPS Trust ids
+  const existingDetails = existing?.details || null;
+  const pfmSel = form.elements.nps_pfm;
+  const tierSel = form.elements.nps_tier;
+  const variantSel = form.elements.nps_variant;
+  const schemesBox = modal.querySelector('#nps-schemes');
+  const npsStatus = modal.querySelector('#nps-status');
+  let npsGroups = null;
+  const VARIANT_LABEL = { '': 'Standard', GS: 'GS (government sector)', DIRECT: 'Direct', POP: 'POP' };
+  const npsCandidates = () => {
+    const g = npsGroups?.find((x) => x.pfm_id === pfmSel.value);
+    return g ? g.schemes.filter((x) => ['E', 'C', 'G', 'A'].includes(x.letter) && x.tier === tierSel.value) : [];
+  };
+  const suggestedNpsName = () => {
+    const pfm = pfmSel.selectedOptions[0]?.textContent || 'NPS';
+    return `NPS Tier ${tierSel.value} · ${pfm.replace(/\s*(pension|fund|management|managers|private|pvt|limited|ltd|solutions|sunlife|mahindra)[\s.]*/gi, ' ').replace(/\s+/g, ' ').trim()}`;
+  };
+  const renderNpsOptions = () => {
+    const cands = npsCandidates();
+    const variants = [...new Set(cands.map((x) => x.variant))].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : a.localeCompare(b)));
+    const wanted = variantSel.dataset.chosen ?? existingDetails?.variant ?? '';
+    variantSel.innerHTML = (variants.length ? variants : ['']).map((v) => `<option value="${esc(v)}" ${v === wanted ? 'selected' : ''}>${esc(VARIANT_LABEL[v] || v)}</option>`).join('');
+    const chosen = existingDetails?.schemes || {};
+    schemesBox.innerHTML = ['E', 'C', 'G', 'A']
+      .map((L) => {
+        const sch = cands.find((x) => x.letter === L && x.variant === variantSel.value);
+        const checked = sch && (existingDetails ? Boolean(chosen[L]) : L !== 'A');
+        return `<label class="check"><input type="checkbox" name="nps_scheme" value="${L}" data-id="${sch ? esc(sch.id) : ''}" ${sch ? '' : 'disabled'} ${checked ? 'checked' : ''}> <span><b>Scheme ${L}</b> · ${SCHEME_NAMES[L]}${sch ? ` · ${esc(sch.id)} · NAV ${sch.nav} (${fmtDate(sch.date)})` : ' · not offered here'}</span></label>`;
+      })
+      .join('');
+    if (!editing && !nameEdited) nameInput.value = suggestedNpsName();
+  };
+  const loadNps = async () => {
+    if (npsGroups) return;
+    npsStatus.textContent = 'Loading the NPS scheme list from NPS Trust…';
+    try {
+      npsGroups = await api.get('/api/nps/schemes');
+    } catch (e) {
+      npsStatus.textContent = `Could not load the NPS scheme list: ${e.message}`;
+      return;
+    }
+    pfmSel.innerHTML = npsGroups.map((g) => `<option value="${esc(g.pfm_id)}" ${existingDetails?.pfm_id === g.pfm_id ? 'selected' : ''}>${esc(g.pfm)}</option>`).join('');
+    if (existingDetails?.tier) tierSel.value = existingDetails.tier;
+    npsStatus.textContent = 'NAVs come from NPS Trust, one series per scheme. Untick a scheme you do not invest in.';
+    renderNpsOptions();
+  };
+  pfmSel.addEventListener('change', renderNpsOptions);
+  tierSel.addEventListener('change', () => {
+    renderNpsOptions();
+    if (!editing) { form.elements.locked.value = tierSel.value === 'I' ? '1' : '0'; modal.querySelector('#lock-until-field').hidden = tierSel.value !== 'I'; }
+  });
+  variantSel.addEventListener('change', () => { variantSel.dataset.chosen = variantSel.value; renderNpsOptions(); });
+
+  // ---- kind switch (add only)
+  const setKind = (next) => {
+    kind = next;
+    const stock = kind === 'STOCK';
+    const npsKind = kind === 'NPS';
+    const epfKind = kind === 'EPF';
+    modal.querySelector('#mf-fields').hidden = kind !== 'MF';
+    modal.querySelector('#stock-fields').hidden = !stock;
+    modal.querySelector('#nps-fields').hidden = !npsKind;
+    modal.querySelector('#epf-fields').hidden = !epfKind;
+    modal.querySelector('#folio-label').textContent = epfKind ? 'UAN' : npsKind ? 'PRAN' : stock ? 'Default account (optional)' : 'Default folio number';
+    modal.querySelector('#folio-hint').textContent = epfKind ? 'Your Universal Account Number (optional).' : npsKind ? 'Your Permanent Retirement Account Number (optional).' : stock ? 'Broker or demat account; each transaction can carry its own.' : 'Pre-filled on new transactions; each transaction can still carry its own folio.';
+    folioInput.placeholder = epfKind ? 'e.g. 100123456789' : npsKind ? 'e.g. 110012345678' : stock ? 'e.g. Zerodha, ESPP, demat no.' : 'e.g. 1234567/89';
+    if (npsKind) {
+      loadNps();
+      if (!editing) { form.elements.locked.value = tierSel.value === 'I' ? '1' : '0'; modal.querySelector('#lock-until-field').hidden = tierSel.value !== 'I'; }
+    } else if (epfKind) {
+      if (!editing) { form.elements.locked.value = '1'; modal.querySelector('#lock-until-field').hidden = false; if (!nameEdited) nameInput.value = 'EPF'; }
+      form.elements.epf_employer.focus();
+    } else (stock ? form.elements.q_stock : form.elements.q).focus();
+  };
+  form.elements.epf_employer.addEventListener('input', () => { if (kind === 'EPF' && !editing && !nameEdited) nameInput.value = `EPF${form.elements.epf_employer.value.trim() ? ` · ${form.elements.epf_employer.value.trim()}` : ''}`; });
+  form.querySelectorAll('input[name="kind"]').forEach((r) => r.addEventListener('change', () => setKind(r.value)));
+  if (kind === 'NPS') loadNps();
+
+  // ---- mutual fund: AMFI scheme search
   const results = modal.querySelector('#scheme-results');
   const q = form.elements.q;
-  const nameInput = form.elements.name;
+  const schemeNote = modal.querySelector('#scheme-change-note');
   let timer = null;
   let seq = 0;
-  let nameEdited = Boolean(existing);
-
+  const updateSchemeNote = () => {
+    if (!editing || kind !== 'MF') return;
+    const code = Number(codeInput.value);
+    if (!code || code === original.code) { schemeNote.hidden = true; return; }
+    const to = selected.code === code && selected.name ? `“${selected.name}” (${code})` : `scheme code ${code}`;
+    const from = original.schemeName ? `“${original.schemeName}”` : `scheme code ${original.code}`;
+    schemeNote.innerHTML = `This fund will be re-linked from ${esc(from)} to ${esc(to)}. Its NAV history will be fetched and all values recalculated. Transactions are not modified.`;
+    schemeNote.hidden = false;
+  };
+  modal.querySelector('#btn-change-scheme')?.addEventListener('click', () => {
+    modal.querySelector('#scheme-search').hidden = false;
+    q.focus();
+  });
   q.addEventListener('input', () => {
     clearTimeout(timer);
     const text = q.value.trim();
@@ -418,17 +1293,121 @@ function openFundModal(existing) {
       }
     }, 350);
   });
-
   results.addEventListener('click', (e) => {
     const b = e.target.closest('.result');
     if (!b) return;
-    form.elements.scheme_code.value = b.dataset.code;
+    selected = { code: Number(b.dataset.code), name: b.dataset.name };
+    codeInput.value = b.dataset.code;
     if (!nameEdited || !nameInput.value.trim()) nameInput.value = b.dataset.name;
     q.value = b.dataset.name;
     results.hidden = true;
     results.innerHTML = '';
+    if (editing) {
+      modal.querySelector('#scheme-name').textContent = b.dataset.name;
+      modal.querySelector('#scheme-meta').textContent = `code ${b.dataset.code} · new selection`;
+    }
+    updateSchemeNote();
+  });
+  codeInput.addEventListener('input', () => {
+    if (Number(codeInput.value) !== selected.code) selected = { code: Number(codeInput.value), name: '' };
+    updateSchemeNote();
   });
 
+  // ---- stock: symbol search and quote lookup
+  const stockResults = modal.querySelector('#stock-results');
+  const qStock = form.elements.q_stock;
+  const symbolHint = modal.querySelector('#symbol-hint');
+  const symbolNote = modal.querySelector('#symbol-change-note');
+  let stockTimer = null;
+  let stockSeq = 0;
+  let lookupSeq = 0;
+  const updateSymbolNote = () => {
+    if (!editing || kind !== 'STOCK') return;
+    const sym = symbolInput.value.trim().toUpperCase();
+    if (!sym || sym === original.symbol) { symbolNote.hidden = true; return; }
+    const to = stockInfo?.symbol === sym && stockInfo.name ? `“${stockInfo.name}” (${sym}${stockInfo.currency ? `, ${stockInfo.currency}` : ''})` : sym;
+    const from = original.stockName ? `“${original.stockName}” (${original.symbol})` : original.symbol;
+    symbolNote.innerHTML = `This holding will be re-linked from ${esc(from)} to ${esc(to)}. Its price history will be fetched and all values recalculated. Transactions are not modified${stockInfo?.currency && existing?.currency && stockInfo.currency !== existing.currency ? `, but note the currency changes from ${esc(existing.currency)} to ${esc(stockInfo.currency)}` : ''}.`;
+    symbolNote.hidden = false;
+  };
+  const lookupSymbol = async () => {
+    const sym = symbolInput.value.trim().toUpperCase();
+    if (!sym) { symbolHint.textContent = 'Pick a search result, or type the symbol used by Yahoo Finance'; return; }
+    if (stockInfo?.symbol === sym && stockInfo.currency) { updateSymbolNote(); return; }
+    const my = ++lookupSeq;
+    symbolHint.textContent = `Looking up ${sym}…`;
+    try {
+      const r = await api.get(`/api/stocks/${encodeURIComponent(sym)}/quote`);
+      if (my !== lookupSeq) return;
+      stockInfo = { symbol: sym, name: r.name || sym, currency: r.currency, exchange: r.exchange };
+      symbolHint.textContent = `${stockInfo.name} · ${[r.exchange, r.currency ? `prices in ${r.currency}` : ''].filter(Boolean).join(' · ')} · ${fmtMoney(r.price, r.currency || BASE, 2)} on ${fmtDate(r.date)}`;
+      if (!nameEdited || !nameInput.value.trim()) nameInput.value = stockInfo.name;
+      if (editing) {
+        modal.querySelector('#stock-name').textContent = stockInfo.name;
+        modal.querySelector('#stock-meta').textContent = `${sym} · ${r.exchange || ''} · prices in ${r.currency || '?'} · new selection`;
+      }
+      updateSymbolNote();
+    } catch (e) {
+      if (my !== lookupSeq) return;
+      stockInfo = { symbol: sym, name: '', currency: null, exchange: null };
+      symbolHint.textContent = `Could not look up ${sym}: ${e.message}`;
+      updateSymbolNote();
+    }
+  };
+  modal.querySelector('#btn-change-symbol')?.addEventListener('click', () => {
+    modal.querySelector('#stock-search').hidden = false;
+    qStock.focus();
+  });
+  qStock.addEventListener('input', () => {
+    clearTimeout(stockTimer);
+    const text = qStock.value.trim();
+    if (text.length < 2) { stockResults.hidden = true; stockResults.innerHTML = ''; return; }
+    stockTimer = setTimeout(async () => {
+      const my = ++stockSeq;
+      stockResults.hidden = false;
+      stockResults.innerHTML = '<div class="muted small pad">Searching…</div>';
+      try {
+        const list = await api.get(`/api/stocks/search?q=${encodeURIComponent(text)}`);
+        if (my !== stockSeq) return;
+        stockResults.innerHTML = list.length
+          ? list.map((s) => `<button type="button" class="result" data-symbol="${esc(s.symbol)}" data-name="${esc(s.name)}"><span><b>${esc(s.symbol)}</b> · ${esc(s.name)}</span><span class="muted small">${esc([s.exchange, s.type === 'EQUITY' ? '' : s.type].filter(Boolean).join(' · '))}</span></button>`).join('')
+          : '<div class="muted small pad">No matching symbols. Try the ticker, e.g. RELIANCE.NS or AAPL.</div>';
+      } catch (e) {
+        if (my === stockSeq) stockResults.innerHTML = `<div class="form-error pad">${esc(e.message)}</div>`;
+      }
+    }, 350);
+  });
+  stockResults.addEventListener('click', (e) => {
+    const b = e.target.closest('.result');
+    if (!b) return;
+    symbolInput.value = b.dataset.symbol;
+    stockInfo = { symbol: b.dataset.symbol, name: b.dataset.name, currency: null, exchange: null };
+    if (!nameEdited || !nameInput.value.trim()) nameInput.value = b.dataset.name;
+    qStock.value = b.dataset.name;
+    stockResults.hidden = true;
+    stockResults.innerHTML = '';
+    lookupSymbol();
+  });
+  let symbolTimer = null;
+  symbolInput.addEventListener('input', () => {
+    clearTimeout(symbolTimer);
+    symbolTimer = setTimeout(lookupSymbol, 600);
+  });
+  symbolInput.addEventListener('change', () => { clearTimeout(symbolTimer); lookupSymbol(); });
+
+  // ---- shared bits
+  const updateFolioOption = () => {
+    const wrap = modal.querySelector('#apply-folio-wrap');
+    const changed = editing && folioInput.value.trim() !== original.folio && oldFolioTxns > 0;
+    wrap.hidden = !changed;
+    modal.querySelector('#apply-folio-count').textContent = oldFolioTxns;
+  };
+  modal.querySelector('#btn-use-scheme-name')?.addEventListener('click', () => {
+    const name = kind === 'STOCK' ? stockInfo?.name : selected.name;
+    if (name) { nameInput.value = name; nameEdited = true; }
+    else toast(kind === 'STOCK' ? 'Pick a stock first' : 'Pick a scheme first', 'warn');
+  });
+  folioInput.addEventListener('input', updateFolioOption);
   nameInput.addEventListener('input', () => { nameEdited = nameInput.value.trim() !== ''; });
   form.querySelectorAll('input[name="locked"]').forEach((r) =>
     r.addEventListener('change', () => { modal.querySelector('#lock-until-field').hidden = form.elements.locked.value !== '1'; }),
@@ -436,30 +1415,71 @@ function openFundModal(existing) {
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const err = modal.querySelector('#fund-form-error');
     err.hidden = true;
     const fd = new FormData(form);
+    const stock = kind === 'STOCK';
+    const npsKind = kind === 'NPS';
     const body = {
       name: String(fd.get('name')).trim(),
-      scheme_code: Number(fd.get('scheme_code')),
+      kind,
+      scheme_code: kind === 'MF' ? Number(fd.get('scheme_code')) || null : null,
+      symbol: stock ? String(fd.get('symbol')).trim().toUpperCase() : null,
+      details: null,
       folio_number: String(fd.get('folio_number')).trim(),
       locked: fd.get('locked') === '1',
       lock_in_until: fd.get('lock_in_until') || null,
       notes: String(fd.get('notes')).trim(),
     };
-    if (!body.name || !Number.isInteger(body.scheme_code) || body.scheme_code <= 0) {
-      err.textContent = 'Pick a scheme (or type its AMFI scheme code) and give the fund a name.';
+    if (editing) {
+      const wrap = modal.querySelector('#apply-folio-wrap');
+      body.apply_folio_to_transactions = !wrap.hidden && form.elements.apply_folio.checked;
+    }
+    if (kind === 'MF' && (!Number.isInteger(body.scheme_code) || body.scheme_code <= 0)) {
+      err.textContent = 'Pick a scheme (or type its AMFI scheme code).';
+      err.hidden = false;
+      return;
+    }
+    if (stock && !body.symbol) {
+      err.textContent = 'Pick a stock from the search, or type its symbol (e.g. RELIANCE.NS, ALL.AX, AAPL).';
+      err.hidden = false;
+      return;
+    }
+    if (npsKind) {
+      const picked = [...form.querySelectorAll('input[name="nps_scheme"]:checked')].filter((c) => c.dataset.id);
+      if (!npsGroups || !pfmSel.value) { err.textContent = 'The NPS scheme list has not loaded yet. Check your connection and try again.'; err.hidden = false; return; }
+      if (!picked.length) { err.textContent = 'Tick at least one scheme (E, C, G or A).'; err.hidden = false; return; }
+      body.details = {
+        pfm_id: pfmSel.value,
+        pfm: pfmSel.selectedOptions[0]?.textContent || '',
+        tier: tierSel.value,
+        variant: variantSel.value,
+        schemes: Object.fromEntries(picked.map((c) => [c.value, c.dataset.id])),
+      };
+      if (!body.name) body.name = suggestedNpsName();
+    }
+    if (kind === 'EPF') {
+      body.details = { employer: String(fd.get('epf_employer') || '').trim() };
+      if (!body.name) body.name = `EPF${body.details.employer ? ` · ${body.details.employer}` : ''}`;
+    }
+    if (!body.name) body.name = stock ? stockInfo?.name || body.symbol : selected.name || '';
+    if (!body.name) {
+      err.textContent = 'Give it a display name.';
       err.hidden = false;
       return;
     }
     const btn = form.querySelector('button[type="submit"]');
     btn.disabled = true;
     try {
-      const saved = existing ? await api.put(`/api/funds/${existing.id}`, body) : await api.post('/api/funds', body);
+      const saved = editing ? await api.put(`/api/funds/${existing.id}`, body) : await api.post('/api/funds', body);
       closeModal();
-      if (saved.nav_error) toast(`Fund saved, but NAV could not be fetched: ${saved.nav_error}`, 'warn');
-      else toast(existing ? 'Fund updated' : 'Fund added');
-      if (existing) render();
+      if (saved.nav_error) toast(`Saved, but prices could not be fetched: ${saved.nav_error}`, 'warn');
+      else if (editing) {
+        const bits = [`${KINDS[kind].label} updated`];
+        if (npsKind ? JSON.stringify(body.details.schemes) !== JSON.stringify(existingDetails?.schemes || {}) : stock ? body.symbol !== original.symbol : body.scheme_code !== original.code) bits.push(npsKind ? 'schemes changed' : stock ? 're-linked to the new symbol' : 're-linked to the new scheme');
+        if (saved.transactions_updated) bits.push(`${stock ? 'account' : 'folio'} changed on ${saved.transactions_updated} transaction${saved.transactions_updated === 1 ? '' : 's'}`);
+        toast(bits.join(' · '));
+      } else toast(`${KINDS[kind].label} added${saved.currency && saved.currency !== BASE ? ` · prices in ${saved.currency}` : ''}`);
+      if (editing) render();
       else location.hash = `#/fund/${saved.id}`;
     } catch (e2) {
       err.textContent = e2.message;
@@ -470,114 +1490,447 @@ function openFundModal(existing) {
 }
 
 // ---------------------------------------------------------------- transaction add / edit modal
-function txnFormHtml(fund, tx) {
+function txnFormHtml(fund, tx, exit = null) {
   const today = todayISO();
+  const k = kindOf(fund);
+  const stock = k.key === 'STOCK';
+  const nps = k.key === 'NPS';
+  const cur = fund.currency || BASE;
+  const type = tx.type || (stock ? 'LUMPSUM' : 'SIP');
+  const letters = nps ? Object.keys(fund.details?.schemes || {}) : [];
+  const schemeNow = tx.scheme || exit?.scheme || fund.scheme || letters[0] || '';
+  const exitNote = exit
+    ? `<div class="banner small">Selling all <b>${fmtNum(exit.units, 4)} ${k.unit}</b>${exit.scoped ? ` in this ${k.folio.toLowerCase()}` : ''} at the latest ${k.price.toLowerCase()}. Change the date and the amount to match your ${stock ? 'contract note' : 'statement'}; once the ${k.unit} held reach zero the ${k.lower} moves to the Closed tab with all its data.${exit.folios > 1 && !exit.scoped ? ` This ${k.lower} spans ${exit.folios} ${k.folioPlural}: to exit them one at a time, filter to a ${k.folio.toLowerCase()} first.` : ''}</div>`
+    : '';
+  const opt = (value, label) => `<option value="${value}" ${type === value ? 'selected' : ''}>${label}</option>`;
+  const typeOptions = nps
+    ? opt('SIP', 'Contribution') + opt('LUMPSUM', 'Lumpsum contribution') + opt('REDEMPTION', 'Withdrawal') + opt('SWITCH_IN', 'Switch in (rebalance into this scheme)') + opt('SWITCH_OUT', 'Switch out (rebalance out of this scheme)') + opt('CHARGE', 'Charges (units deducted)')
+    : stock
+      ? opt('LUMPSUM', 'Buy') + opt('REDEMPTION', 'Sell') + opt('SIP', 'SIP (buy)') + opt('DIVIDEND', 'Dividend received') + opt('BONUS', 'Bonus / free shares') + opt('CHARGE', 'Charges (shares deducted)')
+      : opt('SIP', 'SIP (purchase)') + opt('LUMPSUM', 'Lumpsum (purchase)') + opt('REDEMPTION', 'Redemption (sell)') + opt('DIVIDEND', 'Dividend / IDCW payout') + opt('BONUS', 'Bonus units') + opt('CHARGE', 'Charges (units deducted)');
+  const unitHead = k.unit[0].toUpperCase() + k.unit.slice(1);
+  const folioField = nps
+    ? `<label class="field">Scheme
+        <select name="scheme" ${exit ? 'disabled' : ''}>${letters.map((L) => `<option value="${L}" ${schemeNow === L ? 'selected' : ''}>Scheme ${L} · ${SCHEME_NAMES[L] || ''}</option>`).join('')}</select>
+        <span class="hint">Each scheme has its own NAV and units.</span>
+        <input type="hidden" name="folio_number" value="${esc(tx.folio_number ?? fund.folio_number ?? '')}">
+      </label>`
+    : `<label class="field">${k.folio}${stock ? ' (optional)' : ' number'}
+        <input name="folio_number" value="${esc(tx.folio_number ?? fund.folio_number ?? '')}" placeholder="${stock ? 'e.g. Zerodha, ESPP' : 'One folio, or several separated by /'}">
+      </label>`;
   return `
   <form id="txn-form" class="form" novalidate>
+    ${exitNote}
     <div class="form-row">
       <label class="field">Date
         <input type="date" name="date" required value="${tx.date ?? today}" max="${today}">
       </label>
       <label class="field">Type
-        <select name="type">
-          <option value="SIP" ${tx.type === 'LUMPSUM' ? '' : 'selected'}>SIP</option>
-          <option value="LUMPSUM" ${tx.type === 'LUMPSUM' ? 'selected' : ''}>Lumpsum</option>
-        </select>
+        <select name="type">${typeOptions}</select>
       </label>
     </div>
     <div class="form-row">
-      <label class="field">Folio number
-        <input name="folio_number" value="${esc(tx.folio_number ?? fund.folio_number ?? '')}">
-      </label>
-      <label class="field">Amount (₹)
-        <input type="number" name="amount" required min="0.01" step="0.01" value="${tx.amount ?? ''}" placeholder="5000">
+      ${folioField}
+      <label class="field"><span id="amount-label">Amount (${esc(cur)})</span>
+        <input type="number" name="amount" min="0" step="0.01" value="${tx.amount ?? ''}" placeholder="${nps ? '50000' : stock ? '4000' : '5000'}">
+        <span class="hint" id="amount-hint"></span>
       </label>
     </div>
     <div class="form-row">
-      <label class="field">NAV
-        <input type="number" name="nav" required min="0.0001" step="0.0001" value="${tx.nav ?? ''}">
-        <span class="hint" id="nav-hint">Auto-filled from NAV history for the chosen date</span>
+      <label class="field">${k.price}${stock ? ` per share (${esc(cur)})` : ''}
+        <input type="number" name="nav" min="0" step="0.0001" value="${tx.nav || ''}">
+        <span class="hint" id="nav-hint">Auto-filled from ${k.price} history for the chosen date</span>
       </label>
-      <label class="field">Units
-        <input type="number" name="units" required min="0.0001" step="0.0001" value="${tx.units ?? ''}">
-        <span class="hint">Auto = amount ÷ NAV. Edit to match your statement (stamp duty etc.).</span>
+      <label class="field">${unitHead}
+        <input type="number" name="units" min="0" step="0.0001" value="${tx.units ?? ''}">
+        <span class="hint" id="units-hint">Auto = amount ÷ ${k.price.toLowerCase()}. Edit to match your statement${stock ? ' (brokerage, fees)' : ' (stamp duty etc.)'}. For a sale, enter the amount received and the ${k.unit} sold.</span>
       </label>
     </div>
-    <label class="field">Notes
-      <input name="notes" value="${esc(tx.notes ?? '')}" placeholder="Optional">
+    ${tx.id ? '' : '<label class="check" id="folio-split-wrap" hidden><input type="checkbox" name="split_folios" checked> <span id="folio-split-text"></span></label>'}
+    <label class="field">Comment
+      <input name="notes" value="${esc(tx.notes ?? '')}" maxlength="500" placeholder="Optional, e.g. ${stock ? 'ESPP purchase, vested RSUs' : 'top-up on market dip, bonus money'}">
     </label>
     <div class="form-error" id="txn-form-error" hidden></div>
     <div class="form-actions">
       <button type="button" class="btn ghost" data-close>Cancel</button>
-      <button type="submit" class="btn primary">${tx.id ? 'Save changes' : 'Add transaction'}</button>
+      <button type="submit" class="btn primary">${tx.id ? 'Save changes' : exit ? 'Record exit' : 'Add transaction'}</button>
     </div>
   </form>`;
 }
 
-function openTxnModal(fund, existing) {
-  const modal = openModal(existing ? 'Edit transaction' : `Add transaction · ${esc(fund.name)}`, txnFormHtml(fund, existing || {}));
+/**
+ * Add / edit one transaction. opts.exitUnits opens the form as an "Exit": a sale of everything held,
+ * with the units pre-filled and the amount worked out as units x latest price (editable).
+ */
+/**
+ * EPF: one month in one dialog. The employee, employer and pension amounts of the same date and type are
+ * edited together; a cleared amount deletes that entry, a newly filled one creates it.
+ * entries: the existing entries of the row (empty when adding); date / type seed a new row.
+ */
+function openEpfGroupModal(fund, { entries = [], date, type } = {}) {
+  const cur = fund.currency || BASE;
+  const today = todayISO();
+  const editing = entries.length > 0;
+  const first = entries[0];
+  const t0 = first?.type || type || 'SIP';
+  const d0 = first?.date || date || today;
+  const by = Object.fromEntries(entries.map((t) => [t.scheme, t]));
+  const amountOf = (t) => (t ? (t.type === 'BONUS' ? t.units : t.amount) : '');
+  const rate0 = entries.find((t) => isNum(t.rate))?.rate ?? (fund.transactions || []).find((t) => isNum(t.rate))?.rate ?? '';
+  const notes0 = entries.find((t) => t.notes)?.notes || '';
+  const opt = (v, l) => `<option value="${v}" ${t0 === v ? 'selected' : ''}>${l}</option>`;
+  const modal = openModal(editing ? `Edit ${fmtDate(d0)} · ${esc(fund.name)}` : `Add a month · ${esc(fund.name)}`, `
+  <form id="txn-form" class="form" novalidate>
+    <div class="form-row">
+      <label class="field">Date
+        <input type="date" name="date" required value="${d0}" max="${today}">
+        <span class="hint">Deposits go on the 15th of the month, the year's interest on 31 March.</span>
+      </label>
+      <label class="field">Type
+        <select name="type">${opt('SIP', 'Deposit')}${opt('LUMPSUM', 'Transfer in / opening balance')}${opt('BONUS', 'Interest credited')}${opt('REDEMPTION', 'Withdrawal')}</select>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">Employee share (${esc(cur)})
+        <input type="number" name="ee" min="0" step="0.01" value="${amountOf(by.EE)}" placeholder="e.g. 1800">
+      </label>
+      <label class="field">Employer share (${esc(cur)})
+        <input type="number" name="er" min="0" step="0.01" value="${amountOf(by.ER)}" placeholder="e.g. 550">
+        <span class="hint">The employer's EPF share only, without the pension part.</span>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">Pension (EPS) contribution (${esc(cur)})
+        <input type="number" name="eps" min="0" step="0.01" value="${amountOf(by.EPS)}" placeholder="e.g. 1250">
+        <span class="hint" id="eps-hint">Tracked separately; not part of the balance.</span>
+      </label>
+      <label class="field">Interest rate % (optional)
+        <input type="number" name="rate" min="0" max="100" step="0.01" value="${rate0}" placeholder="e.g. 8.25">
+      </label>
+    </div>
+    <label class="field">Comment
+      <input name="notes" value="${esc(notes0)}" maxlength="500" placeholder="Optional">
+    </label>
+    <input type="hidden" name="folio_number" value="${esc(first?.folio_number ?? fund.folio_number ?? '')}">
+    ${editing ? '<p class="muted small">Leave an amount empty to remove that entry for this date.</p>' : ''}
+    <div class="form-error" id="txn-form-error" hidden></div>
+    <div class="form-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">${editing ? 'Save changes' : 'Add'}</button>
+    </div>
+  </form>`);
   const form = modal.querySelector('#txn-form');
-  const { date, amount, nav, units } = form.elements;
+  const typeSel = form.elements.type;
+  const applyType = () => {
+    const bonus = typeSel.value === 'BONUS';
+    form.elements.eps.disabled = bonus;
+    modal.querySelector('#eps-hint').textContent = bonus ? 'The pension scheme earns no interest.' : 'Tracked separately; not part of the balance.';
+  };
+  typeSel.addEventListener('change', applyType);
+  applyType();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = modal.querySelector('#txn-form-error');
+    err.hidden = true;
+    const fail = (msg) => { err.textContent = msg; err.hidden = false; };
+    const d = form.elements.date.value;
+    const t = typeSel.value;
+    if (!d) return fail('A date is required.');
+    const num = (name) => parseFloat(form.elements[name].value) || 0;
+    const values = { EE: num('ee'), ER: num('er'), EPS: t === 'BONUS' ? 0 : num('eps') };
+    if (!Object.values(values).some((v) => v > 0)) return fail('Enter at least one amount.');
+    const rate = form.elements.rate.value ? parseFloat(form.elements.rate.value) : null;
+    const notes = form.elements.notes.value.trim();
+    const folio = form.elements.folio_number.value.trim();
+    const ops = [];
+    const creates = [];
+    for (const scheme of ['EE', 'ER', 'EPS']) {
+      const v = values[scheme];
+      const body = { date: d, folio_number: folio, scheme, type: t, amount: t === 'BONUS' ? 0 : v, units: v, nav: 1, rate, notes };
+      if (by[scheme] && v > 0) ops.push(api.put(`/api/transactions/${by[scheme].id}`, body));
+      else if (by[scheme]) ops.push(api.del(`/api/transactions/${by[scheme].id}`));
+      else if (v > 0) creates.push(body);
+    }
+    if (creates.length) ops.push(api.post(`/api/funds/${fund.id}/transactions/bulk`, { transactions: creates }));
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      await Promise.all(ops);
+      closeModal();
+      toast(editing ? 'Month updated' : 'Month added');
+      render();
+    } catch (e2) {
+      fail(e2.message);
+      btn.disabled = false;
+    }
+  });
+}
+
+/** EPF: a job change. The new employer's account is created under the same UAN and every employee / employer
+ * share entry moves to it; the pension (EPS) record stays with the old account unless asked otherwise. */
+function openEpfTransferModal(fund) {
+  const today = todayISO();
+  const s = fund.summary || {};
+  const M = (v) => fmtMoney(v, fund.currency || BASE);
+  const modal = openModal(`Moved jobs · ${esc(fund.name)}`, `
+  <form id="txn-form" class="form" novalidate>
+    <div class="banner small">A new EPF account is created for the new employer under the same UAN <b>${esc(fund.folio_number || '')}</b>, and every employee and employer share entry (deposits and interest, ${M(s.current_value)} in balance) moves to it, so its history, by-year table and returns continue unbroken. The pension (EPS) record (${M(s.pension_paid)} paid in) stays here, and this account is listed under Closed.</div>
+    <div class="form-row">
+      <label class="field">New employer
+        <input name="employer" required placeholder="e.g. NewCo" maxlength="120">
+      </label>
+      <label class="field">Date of change
+        <input type="date" name="date" required value="${today}" max="${today}">
+      </label>
+    </div>
+    <label class="field">Display name of the new account
+      <input name="name" required maxlength="200" placeholder="EPF · NewCo">
+    </label>
+    <label class="check"><input type="checkbox" name="move_pension"> Also move the pension (EPS) entries <span class="muted">(normally they stay with the old account)</span></label>
+    <div class="form-error" id="txn-form-error" hidden></div>
+    <div class="form-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Move to the new account</button>
+    </div>
+  </form>`);
+  const form = modal.querySelector('#txn-form');
+  const employer = form.elements.employer;
+  const name = form.elements.name;
+  let nameEdited = false;
+  employer.addEventListener('input', () => { if (!nameEdited) name.value = `EPF · ${employer.value.trim()}`.replace(/ · $/, ''); });
+  name.addEventListener('input', () => { nameEdited = name.value.trim() !== ''; });
+  employer.focus();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = modal.querySelector('#txn-form-error');
+    err.hidden = true;
+    const body = { employer: employer.value.trim(), name: name.value.trim() || `EPF · ${employer.value.trim()}`, date: form.elements.date.value, move_pension: form.elements.move_pension.checked };
+    if (!body.employer || !body.date) { err.textContent = 'The new employer and the date of change are required.'; err.hidden = false; return; }
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      const saved = await api.post(`/api/funds/${fund.id}/epf-transfer`, body);
+      closeModal();
+      toast(`${saved.moved} entr${saved.moved === 1 ? 'y' : 'ies'} moved to ${saved.name}`);
+      location.hash = `#/fund/${saved.id}`;
+    } catch (e2) {
+      err.textContent = e2.message;
+      err.hidden = false;
+      btn.disabled = false;
+    }
+  });
+}
+
+/** EPF: the interest EPFO credited for one financial year, dated 31 March. */
+function openEpfInterestModal(fund) {
+  const cur = fund.currency || BASE;
+  const years = fund.epf?.years || [];
+  const fyNow = Number((fund.epf?.current_fy || '').slice(0, 4)) || new Date().getFullYear();
+  const starts = [...new Set([...years.map((y) => Number(y.fy.slice(0, 4))), fyNow - 1, fyNow])].sort((a, b) => b - a);
+  const pending = fund.epf?.pending_interest_fy;
+  const chosen = pending ? Number(pending.slice(0, 4)) : fyNow - 1;
+  const recorded = (fy) => (fund.transactions || []).filter((t) => t.type === 'BONUS' && fyOfDate(t.date) === fyLabel(fy));
+  const modal = openModal(`Year interest · ${esc(fund.name)}`, `
+  <form id="txn-form" class="form" novalidate>
+    <div class="form-row">
+      <label class="field">Financial year
+        <select name="fy">${starts.map((y) => `<option value="${y}" ${y === chosen ? 'selected' : ''}>${fyLabel(y)}${recorded(y).length ? ' (already recorded)' : ''}</option>`).join('')}</select>
+        <span class="hint">Credited on 31 March of that year.</span>
+      </label>
+      <label class="field">Interest rate % (optional)
+        <input type="number" name="rate" min="0" max="100" step="0.01" placeholder="e.g. 8.25">
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">Interest on the employee share (${esc(cur)})
+        <input type="number" name="ee" min="0" step="0.01" placeholder="e.g. 606">
+      </label>
+      <label class="field">Interest on the employer share (${esc(cur)})
+        <input type="number" name="er" min="0" step="0.01" placeholder="e.g. 249">
+      </label>
+    </div>
+    <div class="form-error" id="txn-form-error" hidden></div>
+    <div class="form-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Record interest</button>
+    </div>
+  </form>`);
+  const form = modal.querySelector('#txn-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = modal.querySelector('#txn-form-error');
+    err.hidden = true;
+    const fail = (msg) => { err.textContent = msg; err.hidden = false; };
+    const fy = Number(form.elements.fy.value);
+    const rate = form.elements.rate.value ? parseFloat(form.elements.rate.value) : null;
+    const ee = parseFloat(form.elements.ee.value) || 0;
+    const er = parseFloat(form.elements.er.value) || 0;
+    if (!(ee > 0) && !(er > 0)) return fail('Enter the interest credited on at least one share.');
+    if (recorded(fy).length) return fail(`Interest for FY ${fyLabel(fy)} is already recorded; edit or delete those entries in the table instead.`);
+    const date = `${fy + 1}-03-31`;
+    const items = [['EE', ee], ['ER', er]].filter(([, a]) => a > 0).map(([scheme, a]) => ({ date, folio_number: fund.folio_number || '', scheme, type: 'BONUS', amount: 0, units: a, nav: 1, rate, notes: `Interest for FY ${fyLabel(fy)}` }));
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      await api.post(`/api/funds/${fund.id}/transactions/bulk`, { transactions: items });
+      closeModal();
+      toast(`Interest for FY ${fyLabel(fy)} recorded`);
+      render();
+    } catch (e2) {
+      fail(e2.message);
+      btn.disabled = false;
+    }
+  });
+}
+
+function openTxnModal(fund, existing, opts = {}) {
+  const k = kindOf(fund);
+  if (k.key === 'EPF') return openEpfGroupModal(fund, existing ? { entries: [existing] } : {});
+  const stock = k.key === 'STOCK';
+  const cur = fund.currency || BASE;
+  const nps = k.key === 'NPS';
+  const exit = !existing && isNum(opts.exitUnits) && opts.exitUnits > 0 ? { units: opts.exitUnits, folios: opts.folios || 0, scoped: Boolean(opts.scoped), scheme: opts.scheme || '' } : null;
+  const seed = existing || (exit ? { type: 'REDEMPTION', units: Number(exit.units.toFixed(4)), scheme: exit.scheme } : {});
+  const modal = openModal(existing ? 'Edit transaction' : exit ? `Exit · ${esc(fund.name)}` : `Add transaction · ${esc(fund.name)}`, txnFormHtml(fund, seed, exit));
+  const form = modal.querySelector('#txn-form');
+  const { date, amount, nav, units, type: typeSel } = form.elements;
+  const schemeSel = nps ? form.elements.scheme : null;
   const hint = modal.querySelector('#nav-hint');
+  const folioInput = form.elements.folio_number;
+  const splitWrap = modal.querySelector('#folio-split-wrap');
+  const updateSplit = () => {
+    if (!splitWrap) return;
+    const parts = splitFolios(folioInput.value);
+    splitWrap.hidden = !parts;
+    if (parts) modal.querySelector('#folio-split-text').textContent = `${parts.length} ${k.folioPlural} detected: create ${parts.length} transactions, splitting the amount and ${k.unit} equally between them`;
+  };
+  folioInput.addEventListener('input', updateSplit);
+  updateSplit();
   let navTouched = Boolean(existing);
-  let unitsTouched = Boolean(existing);
+  let unitsTouched = Boolean(existing) || Boolean(exit);
+  let amountTouched = false;
   let seq = 0;
 
+  const unitsDrive = () => exit || typeSel.value === 'CHARGE'; // units are the input; the amount follows the price
   const recompute = () => {
+    const n = parseFloat(nav.value);
+    if (unitsDrive() && !amountTouched) {
+      // Exit / charges: the units are given; the amount follows the price until the user types the real figure.
+      const u = parseFloat(units.value);
+      amount.value = u > 0 && n > 0 ? (u * n).toFixed(2) : '';
+      return;
+    }
     if (unitsTouched) return;
     const a = parseFloat(amount.value);
-    const n = parseFloat(nav.value);
     units.value = a > 0 && n > 0 ? (a / n).toFixed(4) : '';
+  };
+
+  // Dividends carry money but no units; bonus units carry units but no money; charges are units whose
+  // value follows from the NAV. Disable or pre-fill the boxes so the form cannot be filled in contradictorily.
+  const unitsHint = modal.querySelector('#units-hint');
+  const amountHint = modal.querySelector('#amount-hint');
+  const unitsHintDefault = unitsHint.textContent;
+  const applyType = () => {
+    const t = typeSel.value;
+    const div = t === 'DIVIDEND';
+    const bonus = t === 'BONUS';
+    const charge = t === 'CHARGE';
+    units.disabled = div;
+    amount.disabled = bonus;
+    if (div) units.value = '0';
+    else if (units.value === '0') { units.value = ''; unitsTouched = false; recompute(); }
+    if (bonus) amount.value = '0';
+    else if (amount.value === '0') amount.value = '';
+    if (charge) { unitsTouched = true; recompute(); }
+    unitsHint.textContent = div ? 'Not applicable: a dividend does not change the units you hold.' : bonus ? `Number of free ${k.unit} received. They are added at zero cost.` : charge ? `Number of ${k.unit} deducted for charges.` : unitsHintDefault;
+    amountHint.textContent = div ? 'Cash received. It counts as money coming back in the XIRR.' : bonus ? 'Nothing paid for bonus / free units.' : charge ? `Auto = ${k.unit} × ${k.price.toLowerCase()}: the value deducted. Change it if your statement shows a different figure.` : t === 'SWITCH_IN' || t === 'SWITCH_OUT' ? 'Value moved between schemes; it is not money you paid or received.' : '';
+    if (div || bonus) hint.textContent = `${k.price} on that day, for your records only (optional).`;
   };
 
   const fetchNav = async () => {
     if (navTouched || !date.value) return;
     const my = ++seq;
-    hint.textContent = 'Looking up NAV…';
+    const schemeId = nps ? (fund.details?.schemes || {})[schemeSel?.value] : null;
+    if (nps && !schemeId) { hint.textContent = 'Pick a scheme to look up its NAV.'; return; }
+    hint.textContent = `Looking up ${k.price.toLowerCase()}…`;
     try {
-      const r = await api.get(`/api/schemes/${fund.scheme_code}/nav?on=${date.value}`);
+      const r = stock
+        ? await api.get(`/api/stocks/${encodeURIComponent(fund.symbol)}/quote?on=${date.value}`)
+        : nps
+          ? await api.get(`/api/nps/${encodeURIComponent(schemeId)}/nav?on=${date.value}`)
+          : await api.get(`/api/schemes/${fund.scheme_code}/nav?on=${date.value}`);
       if (my !== seq) return;
-      nav.value = r.nav;
+      const price = stock ? r.price : r.nav;
+      nav.value = stock ? Number(price.toFixed(4)) : price;
       hint.textContent = r.date === date.value
-        ? `NAV on ${fmtDate(r.date)}`
-        : `No NAV published on ${fmtDate(date.value)}; using ${fmtDate(r.date)}. Adjust if your statement differs.`;
+        ? `${k.price} on ${fmtDate(r.date)}${stock ? ' (closing price)' : ''}`
+        : `No ${k.price.toLowerCase()} on ${fmtDate(date.value)}; using ${fmtDate(r.date)}. Adjust if your statement differs.`;
       recompute();
     } catch (e) {
-      if (my === seq) hint.textContent = `NAV lookup failed: ${e.message}. Enter it manually.`;
+      if (my === seq) hint.textContent = `${k.price} lookup failed: ${e.message}. Enter it manually.`;
     }
   };
 
   date.addEventListener('change', fetchNav);
-  amount.addEventListener('input', recompute);
+  schemeSel?.addEventListener('change', () => { navTouched = false; fetchNav(); });
+  amount.addEventListener('input', () => { amountTouched = amount.value !== ''; recompute(); });
   nav.addEventListener('input', () => { navTouched = true; recompute(); });
-  units.addEventListener('input', () => { unitsTouched = units.value !== ''; if (!unitsTouched) recompute(); });
+  units.addEventListener('input', () => { unitsTouched = units.value !== ''; if (!unitsTouched || unitsDrive()) recompute(); });
+  typeSel.addEventListener('change', applyType);
+  applyType();
+  if (exit) amountHint.textContent = `Auto = ${k.unit} × ${k.price.toLowerCase()}. Type the amount you actually received if it differs.`;
   if (!existing) fetchNav();
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const err = modal.querySelector('#txn-form-error');
     err.hidden = true;
+    const fail = (msg) => { err.textContent = msg; err.hidden = false; };
     const body = {
       date: date.value,
       folio_number: form.elements.folio_number.value.trim(),
-      type: form.elements.type.value,
-      amount: parseFloat(amount.value),
-      nav: parseFloat(nav.value),
+      scheme: schemeSel ? schemeSel.value : '',
+      type: typeSel.value,
+      amount: amount.value ? parseFloat(amount.value) : 0,
+      nav: nav.value ? parseFloat(nav.value) : null,
       units: units.value ? parseFloat(units.value) : null,
       notes: form.elements.notes.value.trim(),
     };
-    if (!body.date || !(body.amount > 0) || !(body.nav > 0)) {
-      err.textContent = 'Date, a positive amount and a positive NAV are required.';
-      err.hidden = false;
-      return;
+    if (!body.date) return fail('A date is required.');
+    if (nps && !body.scheme) return fail('Pick the scheme this belongs to.');
+    if (body.type === 'DIVIDEND') {
+      body.units = 0;
+      if (!(body.amount > 0)) return fail('Enter the dividend amount received.');
+    } else if (body.type === 'BONUS') {
+      body.amount = 0;
+      if (!(body.units > 0)) return fail(`Enter the number of bonus ${k.unit} received.`);
+    } else if (body.type === 'CHARGE') {
+      if (!(body.units > 0)) return fail(`Enter the number of ${k.unit} deducted.`);
+      if (!(body.amount > 0) && !(body.nav > 0)) return fail(`Enter the ${k.price.toLowerCase()} on that day or the amount deducted.`);
+    } else if (!(body.amount > 0) || !(body.nav > 0)) {
+      return fail(`A positive amount and a positive ${k.price.toLowerCase()} are required.`);
     }
     const btn = form.querySelector('button[type="submit"]');
     btn.disabled = true;
+    const purchaseOrSale = !['DIVIDEND', 'BONUS', 'CHARGE'].includes(body.type) && !nps;
+    const parts = purchaseOrSale && !existing && splitWrap && !splitWrap.hidden && form.elements.split_folios.checked ? splitFolios(body.folio_number) : null;
     try {
       if (existing) await api.put(`/api/transactions/${existing.id}`, body);
-      else await api.post(`/api/funds/${fund.id}/transactions`, body);
+      else if (parts) {
+        // One purchase spread over several folios: one transaction per folio, amount and units divided equally.
+        const amounts = distribute(body.amount, parts.length, 2);
+        const unitParts = body.units ? distribute(body.units, parts.length, 4) : null;
+        const items = parts.map((folio, kk) => ({
+          ...body,
+          folio_number: folio,
+          amount: amounts[kk],
+          units: unitParts ? unitParts[kk] : null,
+          notes: [body.notes, `Split ${kk + 1}/${parts.length} of ${fmtMoney(body.amount, cur, 2)} across ${k.folioPlural} ${body.folio_number}`].filter(Boolean).join(' · '),
+        }));
+        await api.post(`/api/funds/${fund.id}/transactions/bulk`, { transactions: items });
+      } else await api.post(`/api/funds/${fund.id}/transactions`, body);
       closeModal();
-      toast(existing ? 'Transaction updated' : 'Transaction added');
+      toast(existing ? 'Transaction updated' : parts ? `${parts.length} transactions added, one per ${k.folio.toLowerCase()}` : exit ? 'Exit recorded' : 'Transaction added');
       render();
     } catch (e2) {
       err.textContent = e2.message;
@@ -585,6 +1938,181 @@ function openTxnModal(fund, existing) {
       btn.disabled = false;
     }
   });
+}
+
+// ---------------------------------------------------------------- password protection (vault)
+const SHIELD_ICON =
+  '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><circle cx="12" cy="16.5" r="1.5"/></svg>';
+
+let locked = false;
+let authInfo = { min_password_length: 8, idle_lock_minutes: 30 };
+
+function setLocked(isLocked) {
+  locked = isLocked;
+  document.body.classList.toggle('locked', isLocked);
+}
+
+/** Route to the normal app, the unlock screen or the first-run password setup, based on vault state. */
+function applyAuth(status) {
+  authInfo = { ...authInfo, ...status };
+  if (status.base_currency) BASE = status.base_currency;
+  if (status.version) document.getElementById('app-version').textContent = `v${status.version}`;
+  if (status.state === 'unlocked') {
+    setLocked(false);
+    render();
+    return;
+  }
+  setLocked(true);
+  destroyChart();
+  closeModal();
+  if (status.state === 'setup') renderSetup();
+  else renderLock();
+}
+
+async function boot() {
+  try {
+    applyAuth(await api.get('/api/auth/status'));
+  } catch (err) {
+    app.innerHTML = errorCard(err);
+  }
+}
+
+function renderLock() {
+  const idle = authInfo.idle_lock_minutes;
+  app.innerHTML = `
+    <section class="card auth-card">
+      <div class="auth-icon">${SHIELD_ICON}</div>
+      <h1>Unlock your portfolio</h1>
+      <p class="muted">Your data is encrypted on this computer. Enter your password to open it.</p>
+      <form id="unlock-form" class="form" novalidate>
+        <label class="field">Password
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <div class="form-error" id="auth-error" hidden></div>
+        <div class="form-actions"><button type="submit" class="btn primary">Unlock</button></div>
+      </form>
+      <p class="footnote">There is no password recovery. If the password is lost, the data cannot be opened.${idle ? ` The app locks itself after ${idle} minutes without use.` : ''}${authInfo.version ? ` Version ${authInfo.version}.` : ''}</p>
+    </section>`;
+  const form = document.getElementById('unlock-form');
+  const err = document.getElementById('auth-error');
+  form.elements.password.focus();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = 'Unlocking…';
+    try {
+      await api.post('/api/auth/unlock', { password: form.elements.password.value });
+      applyAuth({ state: 'unlocked' });
+    } catch (e2) {
+      err.textContent = e2.message;
+      err.hidden = false;
+      form.elements.password.value = '';
+      form.elements.password.focus();
+      btn.disabled = false;
+      btn.textContent = 'Unlock';
+    }
+  });
+}
+
+function renderSetup() {
+  const min = authInfo.min_password_length || 8;
+  const n = authInfo.legacy_funds;
+  const legacy = authInfo.has_legacy
+    ? `<div class="banner warn">Your existing data${isNum(n) ? ` (${n} fund${n === 1 ? '' : 's'})` : ''} will be encrypted with this password, and the unencrypted file will be removed.</div>`
+    : '';
+  app.innerHTML = `
+    <section class="card auth-card">
+      <div class="auth-icon">${SHIELD_ICON}</div>
+      <h1>Protect your data with a password</h1>
+      <p class="muted">Everything you enter is stored encrypted on this computer and can only be opened with this password.</p>
+      ${legacy}
+      <form id="setup-form" class="form" novalidate>
+        <label class="field">Password
+          <input type="password" name="password" autocomplete="new-password" required minlength="${min}">
+          <span class="hint">At least ${min} characters. A long phrase you will remember works best.</span>
+        </label>
+        <label class="field">Confirm password
+          <input type="password" name="confirm" autocomplete="new-password" required>
+        </label>
+        <label class="check warn-check"><input type="checkbox" name="ack" required> I understand that if I forget this password my data cannot be recovered. There is no reset.</label>
+        <div class="form-error" id="auth-error" hidden></div>
+        <div class="form-actions"><button type="submit" class="btn primary">Set password and continue</button></div>
+      </form>
+    </section>`;
+  const form = document.getElementById('setup-form');
+  const err = document.getElementById('auth-error');
+  form.elements.password.focus();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    const fail = (msg) => { err.textContent = msg; err.hidden = false; };
+    const pw = form.elements.password.value;
+    if (pw.length < min) return fail(`Password must be at least ${min} characters.`);
+    if (pw !== form.elements.confirm.value) return fail('The two passwords do not match.');
+    if (!form.elements.ack.checked) return fail('Please confirm you understand there is no password recovery.');
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = 'Encrypting…';
+    try {
+      const res = await api.post('/api/auth/setup', { password: pw });
+      toast(res.migrated ? 'Your existing data is now encrypted.' : 'Password set. Your data will be stored encrypted.');
+      applyAuth({ state: 'unlocked' });
+    } catch (e2) {
+      fail(e2.message);
+      btn.disabled = false;
+      btn.textContent = 'Set password and continue';
+    }
+  });
+}
+
+function openPasswordModal() {
+  const min = authInfo.min_password_length || 8;
+  const modal = openModal('Change password', `
+    <form id="pw-form" class="form" novalidate>
+      <label class="field">Current password <input type="password" name="current" autocomplete="current-password" required></label>
+      <label class="field">New password
+        <input type="password" name="new" autocomplete="new-password" required minlength="${min}">
+        <span class="hint">At least ${min} characters. There is still no recovery if you forget it.</span>
+      </label>
+      <label class="field">Confirm new password <input type="password" name="confirm" autocomplete="new-password" required></label>
+      <div class="form-error" id="pw-error" hidden></div>
+      <div class="form-actions">
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Change password</button>
+      </div>
+    </form>`);
+  const form = modal.querySelector('#pw-form');
+  const err = modal.querySelector('#pw-error');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    const fail = (msg) => { err.textContent = msg; err.hidden = false; };
+    const next = form.elements.new.value;
+    if (next.length < min) return fail(`New password must be at least ${min} characters.`);
+    if (next !== form.elements.confirm.value) return fail('The new passwords do not match.');
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      await api.post('/api/auth/change-password', { current: form.elements.current.value, new: next });
+      closeModal();
+      toast('Password changed');
+    } catch (e2) {
+      fail(e2.message);
+      btn.disabled = false;
+    }
+  });
+}
+
+async function lockNow() {
+  try {
+    await api.post('/api/auth/lock');
+  } catch (e) {
+    toast(`Could not lock: ${e.message}`, 'error');
+    return;
+  }
+  applyAuth({ state: 'locked' });
 }
 
 // ---------------------------------------------------------------- global actions
@@ -595,26 +2123,34 @@ async function refreshNav() {
   try {
     const r = await api.post('/api/nav/refresh');
     const failed = Object.values(r.failed);
-    if (failed.length) toast(`NAV refreshed for ${r.requested - failed.length} of ${r.requested} schemes. ${failed[0]}`, 'warn');
-    else toast(r.requested ? `NAV refreshed for ${r.requested} scheme${r.requested === 1 ? '' : 's'}` : 'No funds to refresh');
+    if (failed.length) toast(`Prices refreshed for ${r.requested - failed.length} of ${r.requested} sources. ${failed[0]}`, 'warn');
+    else toast(r.requested ? `Prices refreshed for ${r.requested} source${r.requested === 1 ? '' : 's'}` : 'Nothing to refresh');
     await render();
   } catch (e) {
     toast(`Refresh failed: ${e.message}`, 'error');
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Refresh NAV';
+    btn.textContent = 'Refresh prices';
   }
 }
 
 // ---------------------------------------------------------------- router
 async function render() {
+  if (locked) return; // the lock / setup screen owns the page until the vault is open
   destroyChart();
   const hash = location.hash || '#/';
-  const m = hash.match(/^#\/fund\/(\d+)$/);
+  const m = hash.match(/^#\/fund\/(\d+)(?:\?(.*))?$/);
   try {
-    if (m) await renderFund(Number(m[1]));
-    else await renderPortfolio();
+    if (m) {
+      const fp = new URLSearchParams(m[2] || '');
+      await renderFund(Number(m[1]), fp.get('folio'), fp.get('scheme'));
+    } else {
+      const tab = new URLSearchParams(hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '').get('tab');
+      if (tab === 'closed' || tab === 'active') state.holdingsTab = tab; // #/?tab=closed opens the Closed tab
+      await renderPortfolio();
+    }
   } catch (err) {
+    if (err?.status === 423 || err?.status === 409) return; // vault-state listener switches to the lock screen
     app.innerHTML = errorCard(err);
   }
   window.scrollTo(0, 0);
@@ -622,6 +2158,15 @@ async function render() {
 
 document.getElementById('btn-add-fund').addEventListener('click', () => openFundModal(null));
 document.getElementById('btn-refresh').addEventListener('click', refreshNav);
+document.getElementById('btn-lock').addEventListener('click', lockNow);
+document.getElementById('btn-password').addEventListener('click', openPasswordModal);
+let bootPending = false;
+window.addEventListener('vault-state', () => {
+  // an API call hit a locked (423) or not-yet-set-up (409) vault, e.g. after the idle auto-lock
+  if (bootPending) return;
+  bootPending = true;
+  boot().finally(() => { bootPending = false; });
+});
 document.getElementById('btn-theme').addEventListener('click', () => {
   state.theme = effectiveTheme() === 'dark' ? 'light' : 'dark';
   save('theme', state.theme);
@@ -638,4 +2183,4 @@ document.addEventListener('click', (e) => {
 window.addEventListener('hashchange', render);
 
 applyTheme();
-render();
+boot();

@@ -23,7 +23,7 @@ export function openModal(title, bodyHtml, { wide = false } = {}) {
   escHandler = (e) => { if (e.key === 'Escape') closeModal(); };
   document.addEventListener('keydown', escHandler);
   document.body.classList.add('modal-open');
-  backdrop.querySelector('input, select, button:not([data-close])')?.focus();
+  backdrop.querySelector('input, textarea, select, button:not([data-close])')?.focus();
   return backdrop.querySelector('.modal');
 }
 

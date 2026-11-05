@@ -6,3 +6,9 @@ __pycache__/
 build/
 dist/
 *.spec
+*.db
+*.db-wal
+*.db-shm
+*.enc
+*.sqlite
+*.sqlite3

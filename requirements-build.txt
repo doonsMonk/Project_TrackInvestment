@@ -1,0 +1,9 @@
+# Build-time dependencies: everything in requirements.txt plus the tools that
+# package the app into dist\InvestmentTracker.exe.
+# Install:  .venv\Scripts\python -m pip install -r requirements-build.txt
+# build_exe.bat installs these automatically.
+
+-r requirements.txt
+
+pyinstaller>=6.16   # bundles launcher.py + backend + frontend into a single exe (6.16+ supports Python 3.14)
+pillow>=10          # only used by tools/make_icon.py to generate assets/icon.ico

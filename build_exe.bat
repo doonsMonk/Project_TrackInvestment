@@ -7,8 +7,8 @@ if not exist ".venv\Scripts\python.exe" (
   py -3 -m venv .venv || python -m venv .venv || goto :fail
 )
 
-echo Installing dependencies and build tools...
-.venv\Scripts\python.exe -m pip install -q -r requirements.txt pyinstaller pillow || goto :fail
+echo Installing dependencies and build tools (requirements-build.txt)...
+.venv\Scripts\python.exe -m pip install -q -r requirements-build.txt || goto :fail
 
 if not exist "assets\icon.ico" (
   echo Generating icon...
@@ -16,17 +16,18 @@ if not exist "assets\icon.ico" (
 )
 
 echo Building dist\InvestmentTracker.exe ...
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile ^
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --noconsole ^
   --name InvestmentTracker ^
   --icon assets\icon.ico ^
   --add-data "frontend;frontend" ^
+  --add-data "assets\icon.ico;assets" ^
   --collect-submodules uvicorn ^
   --collect-submodules anyio ^
   launcher.py || goto :fail
 
 echo.
 echo Done:  dist\InvestmentTracker.exe
-echo Copy that single file anywhere. It keeps its database in a "data" folder next to itself.
+echo Copy that single file anywhere. It opens in its own window (no console) and keeps its data in a "data" folder next to itself.
 exit /b 0
 
 :fail
