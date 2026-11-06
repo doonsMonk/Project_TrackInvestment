@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
+import shutil
 import sqlite3
 import sys
 import time
@@ -10,17 +12,22 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field
 
-from . import calc, db, nav, nps, quotes
+from .compat import field_validator, list_limits, model_validator  # pydantic v2 on the PC, v1 on Android
+
+from . import calc, cloud, db, gold, nav, nps, quotes, sgb
 
 # In the PyInstaller build the frontend is unpacked under sys._MEIPASS; in a dev checkout it's <project>/frontend.
 _BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
-FRONTEND_DIR = _BUNDLE_ROOT / "frontend"
+FRONTEND_DIR = Path(os.environ["INVESTMENT_TRACKER_FRONTEND"]) if os.environ.get("INVESTMENT_TRACKER_FRONTEND") else _BUNDLE_ROOT / "frontend"  # Android: unpacked assets
 
-MF, STOCK, NPS, EPF = "MF", "STOCK", "NPS", "EPF"
+MF, STOCK, NPS, EPF, PPF = "MF", "STOCK", "NPS", "EPF", "PPF"
+GOLD = "GOLD"  # Sovereign Gold Bonds: grams valued at a gold price per gram entered by the user
+RUPEE_KINDS = (EPF, PPF)  # no price source: a rupee is a unit, deposits are purchases, interest is zero-cost units
 EPF_SHARES = {"EE": "Employee share", "ER": "Employer share", "EPS": "Pension scheme (EPS)"}
 BASE = quotes.BASE_CURRENCY
 MF_CURRENCY = "INR"  # AMFI and NPS NAVs are always in rupees, whatever the portfolio currency is
@@ -33,7 +40,7 @@ async def lifespan(_: FastAPI):
     db.vault.lock()  # flush and forget the key on shutdown
 
 
-VERSION = "0.6.2"
+VERSION = "0.10.0"
 app = FastAPI(title="Investment Tracker", version=VERSION, lifespan=lifespan)
 
 
@@ -57,7 +64,8 @@ def get_conn():
     except db.VaultNotSetUp as e:
         raise HTTPException(status_code=409, detail="No password set yet. Create one to start.") from e
     except db.VaultLocked as e:
-        raise HTTPException(status_code=423, detail="Locked. Enter your password to continue.") from e
+        detail = str(e) if isinstance(e, db.VaultChangedOnDisk) else "Locked. Enter your password to continue."
+        raise HTTPException(status_code=423, detail=detail) from e
     try:
         yield conn
     finally:
@@ -86,7 +94,143 @@ def auth_status():
         "idle_lock_minutes": db.IDLE_LOCK_SECONDS // 60,
         "base_currency": BASE,
         "version": VERSION,
+        "data_dir": str(db.DATA_DIR),
+        "vault_path": str(db.VAULT_PATH),
+        "configured_data_dir": db.read_settings().get("data_dir"),
+        "settings_path": str(db.SETTINGS_PATH),
+        "notice": v.last_notice,  # why the vault locked itself (the file on disk was replaced), if it did
     }
+
+
+# ----------------------------------------------------------------- cloud backup (Google Drive / OneDrive / Dropbox)
+
+class CloudCredentialsIn(BaseModel):
+    """The OAuth client the user created in the provider's console."""
+
+    provider: Literal["google", "onedrive", "dropbox"]
+    client_id: str = Field(default="", max_length=300)
+    client_secret: Optional[str] = Field(default=None, max_length=300)
+
+
+class CloudProviderIn(BaseModel):
+    provider: Literal["google", "onedrive", "dropbox"]
+
+
+@app.get("/api/cloud/status")
+def cloud_status(check: bool = False):
+    """Setup, connection and backup state of every provider; `check=true` also looks at the copy in the cloud."""
+    return cloud.status(check_remote=check)
+
+
+@app.put("/api/cloud/credentials")
+def cloud_credentials(body: CloudCredentialsIn):
+    if body.client_id and cloud.PROVIDERS[body.provider]["needs_secret"] and not (body.client_secret or "").strip():
+        raise HTTPException(status_code=422, detail=f"{cloud.PROVIDERS[body.provider]['label']} also needs the client secret")
+    try:
+        cloud.set_credentials(body.provider, body.client_id, body.client_secret)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Could not write {db.SETTINGS_PATH}: {e}") from e
+    if not body.client_id:
+        cloud.disconnect(body.provider)
+    return cloud.status()["providers"][body.provider]
+
+
+@app.post("/api/cloud/connect")
+def cloud_connect(body: CloudProviderIn, request: Request):
+    """Start the sign-in: returns the provider's consent URL for the browser. The provider sends the user back to
+    this app's own address, /api/cloud/callback."""
+    host = request.headers.get("host") or f"127.0.0.1:{request.url.port or 8000}"
+    port = host.rsplit(":", 1)[1] if ":" in host else "80"
+    redirect_uri = f"http://127.0.0.1:{port}/api/cloud/callback"
+    try:
+        return {"auth_url": cloud.begin_connect(body.provider, redirect_uri), "redirect_uri": redirect_uri}
+    except cloud.CloudError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+@app.get("/api/cloud/callback", response_class=HTMLResponse)
+def cloud_callback(state: str = "", code: str = "", error: str = "", error_description: str = ""):
+    """Where the provider sends the browser after the consent page."""
+    page = "<!doctype html><meta charset='utf-8'><title>Investment Tracker</title><body style='font-family:system-ui;padding:40px;max-width:520px'>{}</body>"
+    if error:
+        return page.format(f"<h2>Sign-in cancelled</h2><p>{error}: {error_description}</p><p>You can close this tab and try again in the app.</p>")
+    try:
+        result = cloud.finish_connect(state, code)
+    except cloud.CloudError as e:
+        return page.format(f"<h2>Sign-in failed</h2><p>{e}</p><p>Close this tab and try again in the app.</p>")
+    label = cloud.PROVIDERS[result["provider"]]["label"]
+    cloud.schedule_backup(1.0)
+    return page.format(f"<h2>{label} connected</h2><p>Signed in as <b>{result['account']}</b>. The vault will be backed up there after every change.</p><p>You can close this tab and return to the app.</p>")
+
+
+@app.post("/api/cloud/backup")
+def cloud_backup(body: CloudProviderIn):
+    try:
+        return cloud.backup(body.provider)
+    except cloud.CloudError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/api/cloud/restore")
+def cloud_restore(body: CloudProviderIn):
+    """Replace this device's vault with the provider's copy (the previous file is kept beside it)."""
+    try:
+        return cloud.restore(body.provider)
+    except cloud.CloudError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Could not write the vault file: {e}") from e
+
+
+@app.delete("/api/cloud/{provider}", status_code=204)
+def cloud_disconnect(provider: Literal["google", "onedrive", "dropbox"]):
+    cloud.disconnect(provider)
+    return None
+
+
+class DataDirIn(BaseModel):
+    """Where the vault file should live from the next start on; empty = the default folder."""
+
+    path: Optional[str] = Field(default=None, max_length=1000)
+    copy_vault: bool = True
+
+
+@app.put("/api/settings/data-dir")
+def set_data_dir(body: DataDirIn):
+    """Record the data folder in settings.json (next to the exe), optionally copying the current vault file
+    there when that folder has none. Takes effect when the app is started again; nothing is moved or deleted."""
+    settings = db.read_settings()
+    raw = (body.path or "").strip()
+    if not raw:
+        settings.pop("data_dir", None)
+        try:
+            db.write_settings(settings)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"Could not write {db.SETTINGS_PATH}: {e}") from e
+        return {"data_dir": None, "restart_required": True, "copied": False, "vault_exists_there": False}
+    target = Path(raw).expanduser()
+    if not target.is_absolute():
+        raise HTTPException(status_code=422, detail="Give the full path of the folder, for example C:\\Users\\you\\OneDrive\\InvestmentTracker")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        probe = target / ".write_test"
+        probe.touch()
+        probe.unlink()
+    except OSError as e:
+        raise HTTPException(status_code=422, detail=f"That folder cannot be used: {e}") from e
+    dest = target / db.VAULT_PATH.name
+    same = target.resolve() == db.DATA_DIR.resolve()
+    copied = False
+    if body.copy_vault and not same and db.VAULT_PATH.exists() and not dest.exists():
+        db.vault.lock()  # flush, so the copy is complete; the user unlocks again after the restart anyway
+        shutil.copy2(db.VAULT_PATH, dest)
+        copied = True
+    settings["data_dir"] = str(target)
+    try:
+        db.write_settings(settings)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Could not write {db.SETTINGS_PATH}: {e}") from e
+    return {"data_dir": str(target), "restart_required": not same, "copied": copied, "vault_exists_there": dest.exists()}
 
 
 @app.post("/api/quit")
@@ -137,7 +281,8 @@ def auth_change_password(body: ChangePasswordIn):
     try:
         db.vault.change_password(body.current, body.new)
     except db.VaultLocked as e:
-        raise HTTPException(status_code=423, detail="Locked. Enter your password to continue.") from e
+        detail = str(e) if isinstance(e, db.VaultChangedOnDisk) else "Locked. Enter your password to continue."
+        raise HTTPException(status_code=423, detail=detail) from e
     except db.WrongPassword as e:
         time.sleep(0.8)
         raise HTTPException(status_code=401, detail="Current password is wrong.") from e
@@ -162,7 +307,7 @@ class FundIn(BaseModel):
     or an NPS account (pension fund manager + tier, with one NPS Trust scheme id per asset class E / C / G / A)."""
 
     name: str = Field(min_length=1, max_length=200)
-    kind: Literal["MF", "STOCK", "NPS", "EPF"] = MF
+    kind: Literal["MF", "STOCK", "NPS", "EPF", "PPF", "GOLD"] = MF
     scheme_code: Optional[int] = Field(default=None, gt=0)
     symbol: Optional[str] = Field(default=None, max_length=40)
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3,
@@ -218,6 +363,31 @@ class FundIn(BaseModel):
             # transfer links are written by the job-change action and only carried through here
             links = {k: d[k] for k in ("transferred_to", "transferred_from", "transferred_on", "transferred_to_name", "transferred_from_name") if d.get(k) not in (None, "")}
             self.details = {"employer": str(d.get("employer") or "").strip()[:120], **links}
+            self.scheme_code = None
+        elif self.kind == GOLD:
+            d = self.details if isinstance(self.details, dict) else {}
+            issue_date = d.get("issue_date")
+            price = d.get("issue_price")
+            try:
+                price = float(price) if price not in (None, "") else None
+            except (TypeError, ValueError) as e:
+                raise ValueError("issue_price must be a number") from e
+            if price is not None and price <= 0:
+                raise ValueError("issue_price must be positive")
+            self.details = {
+                "form": "SGB",
+                "series": str(d.get("series") or "").strip()[:120],
+                "code": str(d.get("code") or "").strip().upper()[:24],
+                "issue_date": _iso_date_or_none(str(issue_date)) if issue_date else None,
+                "issue_date_from": str(d.get("issue_date_from") or "") or None,  # "sgb" when filled from the exchange list
+                "issue_price": price,
+                "isin": str(d.get("isin") or "").strip().upper() or None,
+            }
+            self.scheme_code = None
+        elif self.kind == PPF:
+            d = self.details if isinstance(self.details, dict) else {}
+            opened = d.get("opened")
+            self.details = {"bank": str(d.get("bank") or "").strip()[:120], "opened": _iso_date_or_none(str(opened)) if opened else None}
             self.scheme_code = None
         else:
             self.details = None
@@ -301,8 +471,8 @@ class TxnIn(BaseModel):
 
 
 def _require_price(body: TxnIn, kind: str) -> None:
-    """A single purchase / sale needs a price or units, except for EPF where a rupee is a unit."""
-    if kind != EPF and body.type not in CASH_ONLY + UNITS_ONLY + UNIT_MOVES and body.nav is None and body.units is None:
+    """A single purchase / sale needs a price or units, except for EPF / PPF where a rupee is a unit."""
+    if kind not in RUPEE_KINDS and body.type not in CASH_ONLY + UNITS_ONLY + UNIT_MOVES and body.nav is None and body.units is None:
         raise HTTPException(status_code=422, detail="NAV / price (or units) is required")
 
 
@@ -349,18 +519,19 @@ def _fund_row(conn: sqlite3.Connection, fund_id: int) -> sqlite3.Row:
     return row
 
 
-def _sources(rows) -> tuple[list[int], list[str], list[str]]:
-    """(AMFI scheme codes, quote symbols incl. FX pairs, NPS scheme ids) needed to value these holdings."""
+def _sources(rows) -> tuple[list[int], list[str], list[str], list[str]]:
+    """(AMFI scheme codes, quote symbols incl. FX pairs, NPS scheme ids, SGB codes) needed to value these holdings."""
     codes = [r["scheme_code"] for r in rows if (r["kind"] or MF) == MF and r["scheme_code"]]
     symbols = [r["symbol"] for r in rows if r["kind"] == STOCK and r["symbol"]]
     pairs = [p for p in (quotes.fx_symbol(r["currency"]) for r in rows) if p]
     nps_ids = [sid for r in rows if r["kind"] == NPS for sid in _nps_schemes(r).values()]
-    return codes, symbols + pairs, nps_ids
+    sgb_codes = [c for c in ((_fund_dict(r)["details"] or {}).get("code") for r in rows if r["kind"] == GOLD) if c]
+    return codes, symbols + pairs, nps_ids, sgb_codes
 
 
 def _auto_refresh(conn: sqlite3.Connection, rows, force: bool = False) -> dict[str, str]:
     """Refresh stale NAV / price / FX / NPS caches; never fail the request because a source is down."""
-    codes, symbols, nps_ids = _sources(rows)
+    codes, symbols, nps_ids, sgb_codes = _sources(rows)
     errors: dict[str, str] = {}
     try:
         errors.update({str(k): v for k, v in nav.refresh_many(conn, codes, force).items()})
@@ -374,6 +545,10 @@ def _auto_refresh(conn: sqlite3.Connection, rows, force: bool = False) -> dict[s
         errors.update(nps.refresh_many(conn, nps_ids, force))
     except Exception as e:  # noqa: BLE001
         errors["*nps"] = str(e)
+    try:
+        errors.update(sgb.refresh_many(conn, sgb_codes, force))
+    except Exception as e:  # noqa: BLE001
+        errors["*sgb"] = str(e)
     return errors
 
 
@@ -390,7 +565,7 @@ def _prepare_source(conn: sqlite3.Connection, body: FundIn) -> tuple[Optional[st
         if not currency:
             raise HTTPException(
                 status_code=422,
-                detail=f"Could not look up {body.symbol}: {error}. Check the symbol (for example RELIANCE.NS, ALL.AX, AAPL).",
+                detail=f"Could not look up {body.symbol}: {error}. Check the symbol (for example RELIANCE.NS, BHP.AX, AAPL).",
             )
         pair = quotes.fx_symbol(currency)
         if pair:
@@ -413,8 +588,35 @@ def _prepare_source(conn: sqlite3.Connection, body: FundIn) -> tuple[Optional[st
                 body.details["tier"] = info["tier"]
         body.details["names"] = names
         return ("; ".join(errors.values()) or None), MF_CURRENCY, None
-    if body.kind == EPF:
-        return None, MF_CURRENCY, None  # no price source: an EPF balance is deposits plus the interest you enter
+    if body.kind in RUPEE_KINDS:
+        return None, MF_CURRENCY, None  # no price source: an EPF / PPF balance is deposits plus the interest you enter
+    if body.kind == GOLD:
+        # With an NSE code the series is priced from sgb.vercel.app and its issue details fill any empty fields;
+        # without one (or offline) the bond is valued at the gold price per gram the user enters.
+        d = body.details or {}
+        code = d.get("code")
+        if not code:
+            return None, MF_CURRENCY, None
+        try:
+            info = sgb.issue_info(code)
+        except sgb.SgbSourceError as e:
+            return f"{code}: {e}", MF_CURRENCY, None
+        if info is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{code} is not in the Sovereign Gold Bond lists at NSE or sgb.vercel.app. Check the NSE symbol (for example SGBMAR30X), "
+                       "or leave the code empty and enter the gold price yourself.",
+            )
+        d["series"] = d.get("series") or info["name"]
+        if not d.get("issue_date") and info.get("issue_date"):
+            d["issue_date"], d["issue_date_from"] = info["issue_date"], "sgb"
+        d["issue_price"] = d.get("issue_price") or info.get("face_value")
+        d["isin"] = info.get("isin") or d.get("isin")
+        try:
+            sgb.refresh_code(conn, code)
+        except sgb.SgbSourceError as e:
+            return str(e), MF_CURRENCY, None
+        return None, MF_CURRENCY, None
     try:
         nav.refresh_scheme(conn, body.scheme_code)
         return None, MF_CURRENCY, None
@@ -423,7 +625,12 @@ def _prepare_source(conn: sqlite3.Connection, body: FundIn) -> tuple[Optional[st
 
 
 def _price_source(conn: sqlite3.Connection, fund: dict, with_history: bool):
-    """(history, latest) for a fund or stock from its own price table."""
+    """(history, latest) for a fund or stock from its own price table; gold holdings share the entered gold price."""
+    if fund["kind"] == GOLD:
+        code = (fund["details"] or {}).get("code")
+        if code and sgb.latest(conn, code):
+            return (sgb.get_history(conn, code) if with_history else []), sgb.latest(conn, code)
+        return (gold.history(conn) if with_history else []), gold.latest(conn)
     if fund["kind"] == STOCK:
         sym = fund["symbol"]
         return (quotes.get_history(conn, sym) if with_history else []), quotes.latest(conn, sym)
@@ -437,8 +644,11 @@ def _price_on_or_before(conn: sqlite3.Connection, row: sqlite3.Row, iso_date: st
     if row["kind"] == NPS:
         sid = _nps_schemes(row).get(scheme)
         return nps.on_or_before(conn, sid, iso_date) if sid else None
-    if row["kind"] == EPF:
+    if row["kind"] in RUPEE_KINDS:
         return (iso_date, 1.0)  # rupees in, rupees out: one unit is one rupee
+    if row["kind"] == GOLD:
+        code = (_fund_dict(row)["details"] or {}).get("code")
+        return (sgb.on_or_before(conn, code, iso_date) if code else None) or gold.on_or_before(conn, iso_date)
     return nav.nav_on_or_before(conn, row["scheme_code"], iso_date)
 
 
@@ -592,6 +802,83 @@ def _epf_payload(fund: dict, all_txns: list[dict], txns: list[dict], today: dt.d
     return fund
 
 
+def _ppf_years(all_txns: list[dict], today: dt.date) -> tuple[list[dict], Optional[str]]:
+    """PPF: one row per financial year (deposits, interest, withdrawals, rate, closing balance) plus the latest
+    year with deposits whose interest has not been entered yet, if any."""
+    years: dict[str, dict] = {}
+    for t in all_txns:
+        y = years.setdefault(fy_of(t["date"]), {"fy": fy_of(t["date"]), "deposit": 0.0, "interest": 0.0, "withdrawn": 0.0, "rate": None})
+        if t["type"] in calc.PURCHASES:
+            y["deposit"] += t["amount"]
+        elif t["type"] == calc.BONUS:
+            y["interest"] += t["units"]
+        elif t["type"] == calc.REDEMPTION:
+            y["withdrawn"] += t["amount"]
+        if t.get("rate") is not None:
+            y["rate"] = t["rate"]
+    rows = sorted(years.values(), key=lambda y: y["fy"])
+    closing = 0.0
+    for y in rows:
+        closing += y["deposit"] + y["interest"] - y["withdrawn"]
+        y["closing"] = round(closing, 2)
+        for k in ("deposit", "interest", "withdrawn"):
+            y[k] = round(y[k], 2)
+    with_deposits = [y["fy"] for y in rows if y["deposit"]]
+    with_interest = [y["fy"] for y in rows if y["interest"]]
+    pending = None
+    if with_deposits:
+        last_dep = max(with_deposits)
+        if not with_interest or max(with_interest) < last_dep:
+            pending = last_dep
+    return rows, pending
+
+
+def _ppf_maturity(fund: dict, all_txns: list[dict], today: dt.date) -> dict:
+    """A PPF account matures 15 financial years after the year it was opened (opened in FY 2015-16 -> 1 April
+    2031); after that it is treated as extended in five-year blocks. The opening date comes from the account's
+    details or, failing that, its first entry."""
+    d = fund.get("details") or {}
+    opened = d.get("opened") or (min(t["date"] for t in all_txns) if all_txns else None)
+    if not opened:
+        return {"opened_on": None, "opened_fy": None, "matures_on": None, "extended_till": None}
+    fy_start = int(fy_of(opened)[:4])
+    matures = dt.date(fy_start + 16, 4, 1)
+    extended = None
+    if matures <= today:
+        extended = matures
+        while extended <= today:
+            extended = extended.replace(year=extended.year + 5)
+    return {"opened_on": opened, "opened_fy": fy_of(opened), "matures_on": matures.isoformat(),
+            "extended_till": extended.isoformat() if extended else None}
+
+
+def _ppf_payload(fund: dict, all_txns: list[dict], txns: list[dict], today: dt.date, detail: bool,
+                 folio: Optional[str]) -> dict:
+    """PPF: one share valued at one rupee per unit, so `summarize` gives the balance, deposits, interest (bonus
+    units) and XIRR without any interest arithmetic."""
+    one = (today.isoformat(), 1.0)
+    with_interest = lambda s: {**s, "interest": round(s["bonus_units"], 2)}  # noqa: E731
+    full = with_interest(calc.summarize(all_txns, one, today))
+    fund["summary"] = full if folio is None else with_interest(calc.summarize(txns, one, today))
+    fund["closed"], fund["closed_on"] = full["closed"], full["closed_on"]
+    years, pending = _ppf_years(all_txns, today)
+    fund["ppf"] = {"years": years, "pending_interest_fy": pending, "current_fy": fy_of(today.isoformat()),
+                   **_ppf_maturity(fund, all_txns, today)}
+    if detail:
+        fund["transactions"] = txns
+        if folio is not None:
+            fund["all_transactions"] = all_txns
+        dates = sorted({t["date"] for t in txns} | {today.isoformat()})
+        fund["history"] = calc.value_history(txns, [(d, 1.0) for d in dates])
+        fund["folios"] = [
+            {"folio": k or NO_FOLIO, "label": k or "No account number",
+             "summary": with_interest(calc.summarize([t for t in all_txns if t["folio_number"] == k], one, today))}
+            for k in sorted({t["folio_number"] for t in all_txns}, key=lambda x: (x == "", x))
+        ]
+        fund["folios_total"] = full
+    return fund
+
+
 def _fund_payload(conn: sqlite3.Connection, row: sqlite3.Row, detail: bool = False, folio: Optional[str] = None,
                   scheme: Optional[str] = None) -> dict:
     """Holding with computed summary (in its own currency). With `folio`, summary / history / transactions are
@@ -660,6 +947,8 @@ def _fund_payload(conn: sqlite3.Connection, row: sqlite3.Row, detail: bool = Fal
 
     if fund["kind"] == EPF:
         return _epf_payload(fund, all_txns, txns, today, detail, folio, scheme)
+    if fund["kind"] == PPF:
+        return _ppf_payload(fund, all_txns, txns, today, detail, folio)
 
     history, latest = _price_source(conn, fund, detail)
     fx = _fx(conn, fund["currency"])
@@ -669,6 +958,29 @@ def _fund_payload(conn: sqlite3.Connection, row: sqlite3.Row, detail: bool = Fal
     fund["closed_on"] = full["closed_on"]
     fund["scheme"] = nav.scheme_meta(conn, fund["scheme_code"]) if fund["kind"] == MF else None
     fund["quote"] = quotes.meta(conn, fund["symbol"]) if fund["kind"] == STOCK else None
+    if fund["kind"] == GOLD:
+        d = fund["details"] or {}
+        issue = d.get("issue_date") or min((t["date"] for t in all_txns if t["type"] in calc.PURCHASES), default=None)
+        ib = sgb.ibja(conn)
+        fund["gold"] = {
+            **gold.schedule(issue, full["units"] or 0.0, d.get("issue_price"), today),
+            "issue_date_assumed": not d.get("issue_date"),
+            "interest_received": full["dividends"],
+            "interest_payments": sum(1 for t in all_txns if t["type"] == calc.DIVIDEND),
+            "price_date": latest[0] if latest else None,
+            "price": latest[1] if latest else None,
+            "price_source": "sgb" if (d.get("code") and sgb.latest(conn, d["code"])) else ("manual" if latest else None),
+            "ibja_price": ib[1] if ib else None,
+            "ibja_date": ib[0] if ib else None,
+            "exchange_name": (sgb.meta(conn, d["code"]) or {}).get("name") if d.get("code") else None,
+            "price_feed": "nse" if (sgb.meta(conn, d["code"]) or {}).get("exchange") == sgb.FEED_NSE else "page" if d.get("code") and sgb.latest(conn, d["code"]) else None,
+        }
+        # The price paid or received on a transaction day is a gold price for that day too: it gives the chart
+        # points before the first entered price (the entered prices still decide today's value).
+        known = {d for d, _ in history}
+        implied = {(t["date"], float(t["nav"])) for t in all_txns
+                   if t["nav"] and t["nav"] > 0 and (t["type"] in calc.PURCHASES or t["type"] == calc.REDEMPTION) and t["date"] not in known}
+        history = sorted(history + list(implied))
     if fx is not None:
         rate_date, rate = fx.latest
         txns_base = calc.convert_txns(txns, fx)
@@ -727,6 +1039,71 @@ def scheme_nav(code: int, on: Optional[str] = None, conn: sqlite3.Connection = D
 
 
 # ----------------------------------------------------------------- stock lookup (quote source)
+
+class GoldPriceIn(BaseModel):
+    """The gold price per gram (INR) on a date; it values every gold holding."""
+
+    date: str
+    price: float = Field(gt=0, le=10_000_000)
+
+    @field_validator("date")
+    @classmethod
+    def _v_date(cls, v):
+        d = _iso_date_or_none(v)
+        if d is None:
+            raise ValueError("date is required")
+        return d
+
+
+@app.get("/api/sgb/issues")
+def sgb_issues(q: Optional[str] = Query(default=None, max_length=60)):
+    """Every Sovereign Gold Bond series known (NSE symbol, name, issue date and price, latest traded price from NSE,
+    interest dates, maturity), live ones first."""
+    try:
+        rows = sgb.list_issues()
+    except sgb.SgbSourceError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    if q:
+        needle = q.strip().upper()
+        rows = [r for r in rows if needle in r["symbol"] or needle in r["name"].upper()]
+    return rows
+
+
+@app.get("/api/gold/price")
+def gold_price(on: Optional[str] = None, conn: sqlite3.Connection = Depends(get_conn)):
+    """The latest gold price per gram (or the one on / just before a date) and the recent entries."""
+    try:
+        on = _iso_date_or_none(on)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    hit = gold.on_or_before(conn, on) if on else gold.latest(conn)
+    if on and hit is None:
+        raise HTTPException(status_code=404, detail="No gold price entered on or before that date")
+    hist = gold.history(conn)
+    return {
+        "date": hit[0] if hit else None,
+        "price": hit[1] if hit else None,
+        "currency": MF_CURRENCY,
+        "history": [{"date": d, "price": p} for d, p in hist[-120:]],
+    }
+
+
+@app.post("/api/gold/price", status_code=201)
+def gold_price_set(body: GoldPriceIn, conn: sqlite3.Connection = Depends(get_conn)):
+    gold.set_price(conn, body.date, body.price)
+    return {"date": body.date, "price": body.price}
+
+
+@app.delete("/api/gold/price/{iso_date}", status_code=204)
+def gold_price_delete(iso_date: str, conn: sqlite3.Connection = Depends(get_conn)):
+    try:
+        iso_date = _iso_date_or_none(iso_date)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if not iso_date or not gold.delete_price(conn, iso_date):
+        raise HTTPException(status_code=404, detail="No gold price on that date")
+    return None
+
 
 @app.get("/api/stocks/search")
 def stock_search(q: str = Query(min_length=1, max_length=100)):
@@ -966,7 +1343,7 @@ def _check_scheme(row: sqlite3.Row, scheme: str) -> str:
 
 def _txn_values(body: TxnIn, scheme: str, kind: str = MF) -> tuple:
     amount = body.amount
-    if kind == EPF:
+    if kind in RUPEE_KINDS:
         # Rupees are the units: a deposit of 750 is 750 units at 1; interest is 13 free units (zero cost).
         units = body.units if body.type in UNITS_ONLY else amount
         if not units or units <= 0:
@@ -1038,7 +1415,7 @@ class BulkTxnItem(BaseModel):
 
 
 class BulkTxnIn(BaseModel):
-    transactions: list[BulkTxnItem] = Field(min_length=1, max_length=5000)
+    transactions: list[BulkTxnItem] = Field(**list_limits(1, 5000))
 
 
 @app.post("/api/funds/{fund_id}/transactions/bulk", status_code=201)
@@ -1057,7 +1434,7 @@ def add_txns_bulk(fund_id: int, body: BulkTxnIn, conn: sqlite3.Connection = Depe
     for i, t in enumerate(body.transactions):
         scheme = _check_scheme(row, t.scheme)
         nav_value, units, amount = t.nav, t.units, t.amount
-        if row["kind"] == EPF:
+        if row["kind"] in RUPEE_KINDS:
             nav_value = 1.0
             units = units if t.type in UNITS_ONLY else amount
             if not units or units <= 0:
@@ -1160,11 +1537,13 @@ def portfolio(conn: sqlite3.Connection = Depends(get_conn)):
         if not f["needs_fx"]:
             summary = f["summary"]
             histories.append(history)
-            flows.extend(calc.cashflows(txns))  # investor cashflows only: NPS switches stay inside the account
+            fund_flows = calc.cashflows(txns)  # investor cashflows only: NPS switches stay inside the account
+            flows.extend(fund_flows)
         elif f["base"]:
             summary = f["base"]["summary"]
             histories.append(history_base)
-            flows.extend(flows_base)
+            fund_flows = flows_base
+            flows.extend(fund_flows)
             c = currencies.setdefault(
                 f["currency"], {"currency": f["currency"], "rate": f["base"]["rate"], "rate_date": f["base"]["rate_date"],
                                 "count": 0, "current_value": 0.0, "current_value_base": 0.0, "invested_base": 0.0},
@@ -1178,7 +1557,7 @@ def portfolio(conn: sqlite3.Connection = Depends(get_conn)):
             pair = quotes.fx_symbol(f["currency"])
             errors.setdefault(pair, f"No {f['currency']}/{BASE} exchange rate downloaded yet")
             continue
-        rollup.append({"summary": summary, "locked": f["locked"], "kind": f["kind"], "closed": f["closed"]})
+        rollup.append({"summary": summary, "locked": f["locked"], "kind": f["kind"], "closed": f["closed"], "flows": fund_flows})
     totals = calc.portfolio_totals(rollup, flows, today)
     active = [f for f in funds if not f["closed"]]
     totals["fund_count"] = len(active)
@@ -1199,10 +1578,10 @@ def portfolio(conn: sqlite3.Connection = Depends(get_conn)):
 
 @app.post("/api/nav/refresh")
 def refresh_nav(conn: sqlite3.Connection = Depends(get_conn)):
-    """Force-refresh every NAV history, stock price history, exchange rate and NPS scheme in use."""
+    """Force-refresh every NAV history, stock price history, exchange rate, NPS scheme and gold bond series in use."""
     rows = conn.execute("SELECT * FROM funds").fetchall()
-    codes, symbols, nps_ids = _sources(rows)
-    requested = len(set(codes)) + len(set(symbols)) + len(set(nps_ids))
+    codes, symbols, nps_ids, sgb_codes = _sources(rows)
+    requested = len(set(codes)) + len(set(symbols)) + len(set(nps_ids)) + len(set(sgb_codes))
     errors = _auto_refresh(conn, rows, force=True)
     return {"requested": requested, "failed": errors}
 

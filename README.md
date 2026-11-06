@@ -1,11 +1,17 @@
 # Investment Tracker
 
-A local web app for tracking Indian mutual funds, stocks on any exchange, NPS accounts and EPF: funds with
-folios, stocks with accounts, NPS schemes E / C / G with their own NAVs, EPF deposits and credited interest, purchases / sales / dividends / bonus units, live NAVs and prices, current
+A local web app for tracking Indian mutual funds, stocks on any exchange, NPS accounts, EPF, PPF and Sovereign Gold Bonds: funds with
+folios, stocks with accounts, NPS schemes E / C / G with their own NAVs, EPF and PPF deposits and credited interest, purchases / sales / dividends / bonus units, live NAVs and prices, current
 value, profit, XIRR, value-over-time charts, currency conversion to INR, and how much of the
 portfolio is locked versus redeemable.
 
-Everything runs on your machine. Data lives in one password-encrypted file under `data/`; nothing is
+An Android build of the same app lives in `android/` (see `android/README.md`): the backend embedded with
+Chaquopy, the frontend in a WebView, the vault opened from or saved to any file.
+
+Everything runs on your machine. Data lives in one password-encrypted file under `data/` (or a folder you choose,
+such as a cloud-synced one, via Change folder… on the lock screen / `settings.json`), and can be backed up to the
+user's own Google Drive, OneDrive or Dropbox after every change (`backend/cloud.py`: OAuth 2.0 with PKCE on the
+loopback address, scopes limited to the app's folder, `/api/cloud/*`); nothing is
 sent anywhere except NAV lookups to the public AMFI-backed API, price / exchange-rate lookups to
 Yahoo Finance and NPS NAV lookups to NPS Trust.
 
@@ -123,14 +129,26 @@ need internet.
 ## Features
 
 **Holdings** are mutual funds (linked to an AMFI scheme code), stocks / ETFs (linked to a Yahoo
-Finance symbol such as `RELIANCE.NS`, `ALL.AX`, `AAPL`, `VOD.L`) or NPS accounts (a pension fund manager
+Finance symbol such as `RELIANCE.NS`, `BHP.AX`, `AAPL`, `VOD.L`) or NPS accounts (a pension fund manager
 and tier, with one NPS Trust scheme id per asset class: `SM007001` = ICICI Scheme E Tier I, and so on).
 An NPS account is valued scheme by scheme; its `summary` adds the schemes up (`units` and `latest_nav`
 are null there), `schemes[]` carries one summary per scheme, and `?scheme=E` scopes the detail to one.
 An EPF account (`kind: EPF`) has no price source at all: a rupee is a unit (nav 1), deposits are purchases
 of the employee (`scheme: EE`) or employer (`ER`) share, interest credited is BONUS units (zero cost), the
 pension contribution is `EPS` and only summed, and `rate` records the year's interest rate. The payload adds
-`epf.years` (one row per financial year with closing balances) and `epf.pending_interest_fy`. A stock is tracked in its exchange's
+`epf.years` (one row per financial year with closing balances) and `epf.pending_interest_fy`. A PPF account
+(`kind: PPF`) works the same way with a single share (`scheme` empty): deposits, interest as BONUS units,
+withdrawals, `details.bank` / `details.opened`, and the payload adds `ppf.years`, `ppf.pending_interest_fy`
+and the maturity (`ppf.matures_on`, 15 financial years after the year of opening; `ppf.extended_till` once
+matured, in five-year blocks). A gold bond (`kind: GOLD`, `details.form: SGB`) holds grams bought at a price
+per gram and is valued at the series' NSE last traded price when it has a code (`backend/sgb.py` reads NSE's
+own JSON feed for the day's price and the __NEXT_DATA__ JSON of sgb.vercel.app for history, face value, issue
+and interest dates and the IBJA gold price; one fetch each for every series, cached in `quotes` under
+`SGB:<code>` and `GOLD:IBJA`, `quote_meta.exchange` naming the feed that gave the latest price), else at the
+gold price per gram the user enters (`backend/gold.py`,
+`quotes` symbol `GOLD:INR`, shared by every such holding; Yahoo Finance does not carry the SGB series); the payload
+adds `gold` with the interest schedule (2.5 % a year on `details.issue_price`, half-yearly), the early-redemption
+date and the maturity worked out from `details.issue_date`. A stock is tracked in its exchange's
 currency; the portfolio converts to INR at daily exchange rates (each cashflow at its own date's rate,
 today's value at the latest rate), so the INR return includes the currency movement and the holding's
 page shows the return in both currencies.
@@ -187,7 +205,12 @@ page shows the return in both currencies.
 - Locked value vs redeemable value, by holding status
 - EPF page: by-financial-year table plus a stacked column chart of employee deposits, employer deposits and
   interest credited per year
-- Active / Closed tabs on the holdings table, rows grouped by asset class with subtotals (groups collapse on click); closed holdings
+- PPF page: deposits, the year's interest and the maturity date with the time left, with the same by-year
+  table and chart; a year's sheet (deposit, Before / After 5th, rate, interest per month) imports in one go
+- Gold bond page: grams at a price per gram, interest receipts, a Bond details card (issue terms, interest
+  schedule, early redemption, maturity) and a Gold price dialog that values every gold bond; a sheet's
+  Current Value line can record the gold price on import
+- Active / Closed tabs on the holdings table, rows grouped by asset class with subtotals and a per-class XIRR (groups collapse on click); closed holdings
   show bought, sold-for, realised (incl. dividends) and final XIRR
 
 ## How price data works
@@ -207,11 +230,14 @@ page shows the return in both currencies.
 - The full history of each scheme, symbol and currency pair is cached inside the encrypted database
   (`nav_history` / `quotes`). It refreshes automatically when older than 6 hours, or immediately via
   "Refresh prices". If a source is unreachable the app keeps working with cached values and shows a
-  warning; a failed source is not retried for 10 minutes, and the remembered error keeps being reported.
+  warning; a failed source is not retried for 10 minutes, and the remembered error keeps being reported. The
+Sovereign Gold Bond series are priced from NSE's feed, with sgb.vercel.app for history and details and as
+the fallback price (`backend/sgb.py`, same staleness and retry rules);
+the entered gold price per gram (`/api/gold/price`) serves bonds without an NSE code.
 
 ## Calculations (`backend/calc.py`)
 
-- EPF needs no new maths: with one rupee per unit, `summarize` on each share gives deposits (invested),
+- EPF and PPF need no new maths: with one rupee per unit, `summarize` on each share gives deposits (invested),
   balance (value), interest (bonus units) and XIRR; `calc.aggregate` adds the shares up, and the return on own
   contributions is `xirr` over employee deposits plus today's balance. Interest is entered, never computed.
 - Transaction types: SIP, LUMPSUM (purchases), REDEMPTION (sale), DIVIDEND (cash in, holdings
@@ -264,6 +290,16 @@ data/                             portfolio.enc (encrypted database, created on 
 | GET, POST | `/api/funds` | List holdings with summaries / create one. Body: `kind` (`MF` with `scheme_code`, or `STOCK` with `symbol`), `name`, `folio_number`, `locked`, `lock_in_until`, `notes` |
 | GET, PUT, DELETE | `/api/funds/{id}` | Holding detail with transactions, history (and `base` / `history_base` in the base currency for a foreign stock) and per-folio summaries / update / delete. `?folio=` scopes the detail to one folio |
 | POST | `/api/funds/{id}/transactions` | Add a transaction (`SIP`, `LUMPSUM`, `REDEMPTION`, `DIVIDEND`, `BONUS`, `SWITCH_IN`, `SWITCH_OUT`, `CHARGE`; `scheme` for NPS / EPF; `rate` for EPF) |
+| GET | `/api/cloud/status` | Setup / connection / last backup per provider; `?check=true` also looks at the cloud copy |
+| PUT | `/api/cloud/credentials` | Store a provider's OAuth client ID (and secret) in settings.json |
+| POST | `/api/cloud/connect` | Start the sign-in: returns the consent URL; the provider returns to `/api/cloud/callback` |
+| POST | `/api/cloud/backup` | Upload the vault file now |
+| POST | `/api/cloud/restore` | Replace this device's vault with the cloud copy (previous file kept) |
+| DELETE | `/api/cloud/{provider}` | Forget the sign-in |
+| GET | `/api/sgb/issues` | Every Sovereign Gold Bond series on the exchange list (symbol, name, issue date and price, latest price, interest dates) |
+| GET | `/api/gold/price` | The gold price per gram (latest, or `?on=` a date) and the recent entries |
+| POST | `/api/gold/price` | Record the gold price per gram for a date (`{date, price}`) |
+| DELETE | `/api/gold/price/{date}` | Remove the entry for that date |
 | POST | `/api/funds/{id}/epf-transfer` | EPF job change: creates the new employer's account (same UAN) and moves the EE / ER entries to it; EPS stays unless `move_pension`. Both accounts get `details.transferred_*` links |
 | POST | `/api/funds/{id}/transactions/bulk` | Add many at once (all or nothing; fills price / units from history) |
 | PUT, DELETE | `/api/transactions/{id}` | Edit / delete a transaction |

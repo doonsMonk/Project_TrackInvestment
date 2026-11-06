@@ -23,10 +23,20 @@ const KINDS = {
          types: { SIP: 'Contribution', LUMPSUM: 'Lumpsum contribution', REDEMPTION: 'Withdrawal', DIVIDEND: 'Dividend', BONUS: 'Bonus units', ...MOVE_TYPES }, sold: 'withdrawn' },
   EPF: { key: 'EPF', label: 'EPF account', lower: 'EPF account', plural: 'EPF accounts', price: 'NAV', realisedWhat: 'on withdrawals', folio: 'UAN', folioPlural: 'UANs', unit: 'rupees', priceDecimals: 2,
          types: { SIP: 'Deposit', LUMPSUM: 'Transfer in', REDEMPTION: 'Withdrawal', DIVIDEND: 'Dividend', BONUS: 'Interest credited', ...MOVE_TYPES }, sold: 'withdrawn' },
+  PPF: { key: 'PPF', label: 'PPF account', lower: 'PPF account', plural: 'PPF accounts', price: 'NAV', realisedWhat: 'on withdrawals', folio: 'Account number', folioPlural: 'account numbers', unit: 'rupees', priceDecimals: 2,
+         types: { SIP: 'Deposit', LUMPSUM: 'Transfer in', REDEMPTION: 'Withdrawal', DIVIDEND: 'Dividend', BONUS: 'Interest credited', ...MOVE_TYPES }, sold: 'withdrawn' },
+  GOLD: { key: 'GOLD', label: 'Sovereign Gold Bond', lower: 'gold bond', plural: 'Gold', price: 'Price per gram', realisedWhat: 'from sales', dividendWord: 'interest', folio: 'Folio', folioPlural: 'folios', unit: 'grams', priceDecimals: 2,
+          types: { SIP: 'SIP', LUMPSUM: 'Purchase', REDEMPTION: 'Redemption / sale', DIVIDEND: 'Interest', BONUS: 'Bonus units', ...MOVE_TYPES }, sold: 'sold' },
 };
 const EPF_SHARES = { EE: 'Employee share', ER: 'Employer share', EPS: 'Pension (EPS)' };
 /** Indian financial year of an ISO date: '2011-02-15' -> '2010-11'. */
 const fyOfDate = (iso) => { const y = Number(iso.slice(0, 4)); const start = Number(iso.slice(5, 7)) >= 4 ? y : y - 1; return `${start}-${String((start + 1) % 100).padStart(2, '0')}`; };
+/** PPF maturity: 1 April, 15 financial years after the year the account was opened. */
+const ppfMaturityDate = (iso) => { const y = Number(iso.slice(0, 4)); const start = Number(iso.slice(5, 7)) >= 4 ? y : y - 1; return `${start + 16}-04-01`; };
+/** ISO date n years later (29 February becomes 1 March in a common year, as HTML date inputs reject it). */
+const addYears = (iso, n) => { const d = new Date(`${iso}T00:00:00`); d.setFullYear(d.getFullYear() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const goldMaturityText = (g) => (!g?.maturity ? '' : g.matured ? `matured ${fmtDate(g.maturity)}` : `matures ${fmtDate(g.maturity)}`);
+const ppfMaturityText = (p) => (!p?.matures_on ? '' : p.extended_till ? `matured ${fmtDate(p.matures_on)} · extended till ${fmtDate(p.extended_till)}` : `matures ${fmtDate(p.matures_on)}`);
 const CHIP_CLASS = { REDEMPTION: ' redemption', DIVIDEND: ' dividend', BONUS: ' bonus', SWITCH_IN: ' switch', SWITCH_OUT: ' switch', CHARGE: ' charge' };
 const kindOf = (f) => KINDS[f?.kind] || KINDS.MF;
 const SCHEME_NAMES = { E: 'Equity', C: 'Corporate bonds', G: 'Government securities', A: 'Alternative assets' };
@@ -36,6 +46,7 @@ const ASSET_CLASSES = [
   { kind: 'STOCK', label: 'Stocks', one: 'stock', many: 'stocks' },
   { kind: 'NPS', label: 'NPS', one: 'account', many: 'accounts' },
   { kind: 'EPF', label: 'EPF', one: 'account', many: 'accounts' },
+  { kind: 'PPF', label: 'PPF', one: 'account', many: 'accounts' },
   { kind: 'GOLD', label: 'Gold', one: 'holding', many: 'holdings' },
 ];
 let BASE = 'INR'; // portfolio currency, confirmed by the server on boot
@@ -96,30 +107,30 @@ function statusBadge(f) {
 }
 
 /** "realised ₹1,277 (₹1,200 from sales · ₹77 dividends)", or '' when nothing has been realised. */
-function realisedText(s, M, what = 'from sales') {
+function realisedText(s, M, what = 'from sales', divWord = 'dividends') {
   const r = s.realised_gain || 0;
   const d = s.dividends || 0;
   if (!r && !d) return '';
-  if (r && d) return `realised ${M(r + d)} (${M(r)} ${what} · ${M(d)} dividends)`;
-  return `realised ${M(r + d)} ${d ? 'in dividends' : what}`;
+  if (r && d) return `realised ${M(r + d)} (${M(r)} ${what} · ${M(d)} ${divWord})`;
+  return `realised ${M(r + d)} ${d ? `in ${divWord}` : what}`;
 }
 
 /** Investment less the dividends already received, shown under the investment figure. */
-function netOfDividends(s, M) {
+function netOfDividends(s, M, divWord = 'dividends') {
   if (!s.dividends || !s.invested) return '';
-  return s.net_invested > 0 ? `${M(s.net_invested)} net of dividends received` : 'dividends received exceed the cost';
+  return s.net_invested > 0 ? `${M(s.net_invested)} net of ${divWord} received` : `${divWord} received exceed the cost`;
 }
 
 function kindChip(f) {
-  const short = { STOCK: 'Stock', NPS: 'NPS', EPF: 'EPF' }[f.kind] || 'MF';
+  const short = { STOCK: 'Stock', NPS: 'NPS', EPF: 'EPF', PPF: 'PPF', GOLD: 'Gold' }[f.kind] || 'MF';
   return `<span class="chip kind${f.kind === 'MF' || !f.kind ? '' : ` ${f.kind.toLowerCase()}`}">${short}</span>`;
 }
 
-function hero({ label, value, profit, absPct, realised = 0, dividends = 0, currency = BASE, approx = '', realisedWhat = 'from sales' }) {
+function hero({ label, value, profit, absPct, realised = 0, dividends = 0, currency = BASE, approx = '', realisedWhat = 'from sales', dividendWord = 'dividends' }) {
   const M = (v) => fmtMoney(v, currency);
   const has = isNum(profit);
   const up = has && profit >= 0;
-  const taken = realisedText({ realised_gain: realised, dividends }, M, realisedWhat);
+  const taken = realisedText({ realised_gain: realised, dividends }, M, realisedWhat, dividendWord);
   let sub;
   if (has) {
     sub = `<div class="delta ${up ? 'up' : 'down'}"><span aria-hidden="true">${up ? '▲' : '▼'}</span> ${M(Math.abs(profit))}
@@ -293,7 +304,7 @@ async function renderPortfolio() {
 
   const asOf = data.funds.map((f) => f.summary.latest_nav_date).filter(Boolean).sort().pop();
   const tokens = themeTokens();
-  const anyStock = data.funds.some((f) => f.kind === 'STOCK');
+  const anyStock = data.funds.some((f) => f.kind && f.kind !== 'MF'); // kind chips once there is more than one kind
   const activeFunds = data.funds.filter((f) => !f.closed);
   const closedFunds = data.funds.filter((f) => f.closed);
   const rowBits = (f) => {
@@ -309,7 +320,11 @@ async function renderPortfolio() {
         ? ['NPS', f.details?.pfm, f.details?.tier ? `Tier ${f.details.tier}` : '', f.schemes?.length ? `Schemes ${f.schemes.map((p) => p.scheme).join(' / ')}` : ''].filter(Boolean).join(' · ')
         : f.kind === 'EPF'
           ? ['EPF', f.details?.employer, f.epf?.pending_interest_fy ? `interest for FY ${f.epf.pending_interest_fy} pending` : ''].filter(Boolean).join(' · ')
-          : f.scheme?.scheme_category;
+          : f.kind === 'GOLD'
+            ? ['Sovereign Gold Bond', f.details?.code, goldMaturityText(f.gold), f.gold?.price ? '' : 'no gold price entered'].filter(Boolean).join(' · ')
+          : f.kind === 'PPF'
+            ? ['PPF', f.details?.bank, ppfMaturityText(f.ppf), f.ppf?.pending_interest_fy ? `interest for FY ${f.ppf.pending_interest_fy} pending` : ''].filter(Boolean).join(' · ')
+            : f.scheme?.scheme_category;
     const sub = [what, folioText].filter(Boolean).join(' · ');
     const native = (v) => (foreign ? `<div class="sub-amount">${fmtMoney(v, cur)}</div>` : '');
     const nameCell = `<td><div class="fund-name">${anyStock ? kindChip(f) : ''}${esc(f.name)}</div><div class="muted small">${esc(sub)}</div></td>`;
@@ -354,18 +369,20 @@ async function renderPortfolio() {
     const sums = group.map(inrOf).filter(Boolean);
     const invested = sums.reduce((s, x) => s + x.invested, 0);
     const value = sums.reduce((s, x) => s + x.current_value, 0);
-    return `<tr class="group-total"><td colspan="2">${esc(c.label)}</td><td class="num">${fmtINR(invested)}</td><td class="num">${fmtINR(value)}</td><td class="num">${deltaValue(invested ? value - invested : null)}</td><td colspan="3"></td></tr>`;
+    const x = t.by_kind?.[c.kind]?.active_xirr;
+    return `<tr class="group-total"><td colspan="2">${esc(c.label)}</td><td class="num">${fmtINR(invested)}</td><td class="num">${fmtINR(value)}</td><td class="num">${deltaValue(invested ? value - invested : null)}</td><td class="num" title="Annualised return of these holdings together, in ${esc(BASE)}">${fmtPct(pct(x))}</td><td colspan="2"></td></tr>`;
   };
   const closedSubtotal = (c, group) => {
     const sums = group.map(inrOf).filter(Boolean);
     const bought = sums.reduce((s, x) => s + x.purchased, 0);
     const sold = sums.reduce((s, x) => s + x.redeemed, 0);
     const realised = sums.reduce((s, x) => s + x.realised_total, 0);
-    return `<tr class="group-total"><td colspan="2">${esc(c.label)}</td><td class="num">${fmtINR(bought)}</td><td class="num">${fmtINR(sold)}</td><td class="num">${deltaValue(realised)}</td><td colspan="2"></td></tr>`;
+    const x = t.by_kind?.[c.kind]?.closed_xirr;
+    return `<tr class="group-total"><td colspan="2">${esc(c.label)}</td><td class="num">${fmtINR(bought)}</td><td class="num">${fmtINR(sold)}</td><td class="num">${deltaValue(realised)}</td><td class="num" title="Annualised return of these closed holdings together, in ${esc(BASE)}">${fmtPct(pct(x))}</td><td></td></tr>`;
   };
   const activeRow = (f) => {
       const { k, s, cur, bs, native, nameCell, xirrCell, editCell } = rowBits(f);
-      const taken = bs ? realisedText(bs, fmtINR, k.realisedWhat || 'from sales') : '';
+      const taken = bs ? realisedText(bs, fmtINR, k.realisedWhat || 'from sales', k.dividendWord) : '';
       return `
         <tr class="row-link" data-href="#/fund/${f.id}" tabindex="0">
           ${nameCell}
@@ -374,7 +391,7 @@ async function renderPortfolio() {
           <td class="num">${bs ? fmtINR(bs.current_value) : '–'}${native(s.current_value)}</td>
           <td class="num">${bs ? deltaValue(bs.invested ? bs.profit : null) : '–'}<div class="muted small">${bs ? fmtPct(bs.abs_return_pct) : ''}${taken ? ` · ${taken}` : ''}</div></td>
           ${xirrCell}
-          <td class="num muted small">${isNum(s.latest_nav) ? `${fmtMoney(s.latest_nav, cur, k.priceDecimals)}<br>${fmtDate(s.latest_nav_date)}` : f.kind === 'NPS' && f.schemes?.length ? f.schemes.map((p) => `${esc(p.scheme)} ${isNum(p.summary.latest_nav) ? fmtNum(p.summary.latest_nav, 2) : '–'}`).join('<br>') : f.kind === 'EPF' ? `${fmtINR(s.interest)}<br>interest` : '–'}</td>
+          <td class="num muted small">${isNum(s.latest_nav) ? `${fmtMoney(s.latest_nav, cur, k.priceDecimals)}<br>${fmtDate(s.latest_nav_date)}` : f.kind === 'NPS' && f.schemes?.length ? f.schemes.map((p) => `${esc(p.scheme)} ${isNum(p.summary.latest_nav) ? fmtNum(p.summary.latest_nav, 2) : '–'}`).join('<br>') : f.kind === 'EPF' || f.kind === 'PPF' ? `${fmtINR(s.interest)}<br>interest` : '–'}</td>
           ${editCell}
         </tr>`;
     };
@@ -387,7 +404,7 @@ async function renderPortfolio() {
           <td>${statusBadge(f)}</td>
           <td class="num">${bs ? fmtINR(bs.purchased) : '–'}${native(s.purchased)}</td>
           <td class="num">${bs ? fmtINR(bs.redeemed) : '–'}${native(s.redeemed)}</td>
-          <td class="num">${bs ? deltaValue(bs.realised_total) : '–'}<div class="muted small">${bs?.dividends ? `incl. ${fmtINR(bs.dividends)} dividends` : ''}</div></td>
+          <td class="num">${bs ? deltaValue(bs.realised_total) : '–'}<div class="muted small">${bs?.dividends ? `incl. ${fmtINR(bs.dividends)} ${k.dividendWord || 'dividends'}` : ''}</div></td>
           ${xirrCell}
           ${editCell}
         </tr>`;
@@ -555,12 +572,17 @@ function epfGroups(txns) {
   return rows;
 }
 
-function epfTxnTable(txns, cur) {
+/** EPF / PPF entries, one row per date and type: EPF shows the employee, employer and pension amounts side by
+ * side, PPF a single amount. */
+function epfTxnTable(txns, cur, kind = 'EPF') {
+  const ppf = kind === 'PPF';
+  const shares = ppf ? [['', `Amount (${esc(cur)})`]] : [['EE', 'Employee'], ['ER', 'Employer'], ['EPS', 'Pension (EPS)']];
+  const types = (KINDS[kind] || KINDS.EPF).types;
   const M = (v, d = 2) => fmtMoney(v, cur, d);
   const amountOf = (t) => (t.type === 'BONUS' ? t.units : t.amount);
   const sum = (pred) => txns.filter(pred).reduce((s, t) => s + amountOf(t), 0);
   const deposits = sum((t) => (t.type === 'SIP' || t.type === 'LUMPSUM') && t.scheme !== 'EPS');
-  const pension = sum((t) => (t.type === 'SIP' || t.type === 'LUMPSUM') && t.scheme === 'EPS');
+  const pension = ppf ? 0 : sum((t) => (t.type === 'SIP' || t.type === 'LUMPSUM') && t.scheme === 'EPS');
   const interest = sum((t) => t.type === 'BONUS');
   const withdrawn = sum((t) => t.type === 'REDEMPTION');
   const cell = (t) => (t ? `${t.type === 'REDEMPTION' ? '−' : ''}${M(amountOf(t))}` : '<span class="muted">–</span>');
@@ -571,10 +593,8 @@ function epfTxnTable(txns, cur) {
       return `
       <tr data-ids="${g.entries.map((t) => t.id).join(',')}">
         <td>${fmtDate(g.date)}</td>
-        <td><span class="chip${CHIP_CLASS[g.type] || ''}">${KINDS.EPF.types[g.type] || g.type}</span></td>
-        <td class="num">${cell(g.shares.EE)}</td>
-        <td class="num">${cell(g.shares.ER)}</td>
-        <td class="num">${cell(g.shares.EPS)}</td>
+        <td><span class="chip${CHIP_CLASS[g.type] || ''}">${types[g.type] || g.type}</span></td>
+        ${shares.map(([key]) => `<td class="num">${cell(g.shares[key])}</td>`).join('')}
         <td class="num">${isNum(rate) ? `${rate}%` : '–'}</td>
         <td class="comment-cell">${commentCell(note)}</td>
         <td class="row-actions"><button type="button" class="link-btn" data-edit>Edit</button><button type="button" class="link-btn danger-text" data-del>Delete</button></td>
@@ -585,15 +605,15 @@ function epfTxnTable(txns, cur) {
   return `
     <div class="table-wrap">
       <table class="data txn-table">
-        <thead><tr><th>Date</th><th>Type</th><th class="num">Employee</th><th class="num">Employer</th><th class="num">Pension (EPS)</th><th class="num">IR%</th><th>Comment</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Type</th>${shares.map(([, label]) => `<th class="num">${label}</th>`).join('')}<th class="num">IR%</th><th>Comment</th><th></th></tr></thead>
         <tbody>${body}</tbody>
-        <tfoot><tr><td colspan="2">Total (${txns.length} entr${txns.length === 1 ? 'y' : 'ies'})</td><td class="num" colspan="2">${line(deposits, 'deposits (employee + employer)')}${line(interest, 'interest')}${line(withdrawn, 'withdrawn')}</td><td class="num">${line(pension, 'pension (EPS)')}</td><td colspan="3"></td></tr></tfoot>
+        <tfoot><tr><td colspan="2">Total (${txns.length} entr${txns.length === 1 ? 'y' : 'ies'})</td><td class="num"${ppf ? '' : ' colspan="2"'}>${line(deposits, ppf ? 'deposits' : 'deposits (employee + employer)')}${line(interest, 'interest')}${line(withdrawn, 'withdrawn')}</td>${ppf ? '' : `<td class="num">${line(pension, 'pension (EPS)')}</td>`}<td colspan="3"></td></tr></tfoot>
       </table>
     </div>`;
 }
 
 function txnTable(txns, k, cur, { showScheme = false, epf = false } = {}) {
-  if (epf) return epfTxnTable(txns, cur);
+  if (epf) return epfTxnTable(txns, cur, k.key);
   const is = (t, ...types) => types.includes(t.type);
   const M = (v, d = 0) => fmtMoney(v, cur, d);
   const sum = (...types) => txns.filter((t) => is(t, ...types)).reduce((s, t) => s + t.amount, 0);
@@ -628,7 +648,7 @@ function txnTable(txns, k, cur, { showScheme = false, epf = false } = {}) {
       <table class="data txn-table">
         <thead><tr><th>Date</th><th>${showScheme ? 'Scheme' : k.folio}</th><th>Type</th><th class="num">Amount (${esc(cur)})</th><th class="num">${k.price}</th><th class="num">${unitHead}</th><th>Comment</th><th></th></tr></thead>
         <tbody>${body}</tbody>
-        <tfoot><tr><td colspan="3">Total (${txns.length} transaction${txns.length === 1 ? '' : 's'})</td><td class="num">${line(totalAmount, showScheme ? 'contributed' : 'bought')}${line(soldAmount, k.sold)}${line(divAmount, 'dividends')}${line(switchedIn, 'switched in')}${line(switchedOut, 'switched out')}${line(charges, 'charges')}</td><td></td><td class="num">${fmtNum(totalUnits, 4)}<div class="muted small">held</div></td><td colspan="2"></td></tr></tfoot>
+        <tfoot><tr><td colspan="3">Total (${txns.length} transaction${txns.length === 1 ? '' : 's'})</td><td class="num">${line(totalAmount, showScheme ? 'contributed' : 'bought')}${line(soldAmount, k.sold)}${line(divAmount, k.dividendWord || 'dividends')}${line(switchedIn, 'switched in')}${line(switchedOut, 'switched out')}${line(charges, 'charges')}</td><td></td><td class="num">${fmtNum(totalUnits, 4)}<div class="muted small">held</div></td><td colspan="2"></td></tr></tfoot>
       </table>
     </div>`;
 }
@@ -650,6 +670,37 @@ function schemeFilter(f, activeKey, labelOf = (p) => `Scheme ${esc(p.scheme)}`, 
     `<button type="button" class="range-btn${(activeKey || '') === key ? ' active' : ''}" data-scheme="${esc(key)}">${label}</button>`;
   return `<div class="filter-bar"><span class="muted small">${title}</span>
     <div class="range-filter folio-filter" role="group" aria-label="${title}">${btn('', 'Whole account')}${f.schemes.map((p) => btn(p.scheme, labelOf(p))).join('')}</div></div>`;
+}
+
+/** "2 years 5 months left", "3 months left", or '' once the date has passed. */
+function timeLeft(iso) {
+  const now = new Date();
+  const to = new Date(`${iso}T00:00:00`);
+  const months = (to.getFullYear() - now.getFullYear()) * 12 + (to.getMonth() - now.getMonth()) - (to.getDate() < now.getDate() ? 1 : 0);
+  if (months <= 0) return '';
+  const y = Math.floor(months / 12);
+  const m = months % 12;
+  return `${[y ? `${y} year${y === 1 ? '' : 's'}` : '', m ? `${m} month${m === 1 ? '' : 's'}` : ''].filter(Boolean).join(' ')} left`;
+}
+
+/** PPF: the four headline tiles. */
+function ppfTiles(s, M, f) {
+  const p = f.ppf || {};
+  const years = p.years || [];
+  const lastInterest = [...years].reverse().find((y) => y.interest);
+  const thisFy = years.find((y) => y.fy === p.current_fy);
+  const interest = isNum(s.interest) ? s.interest : s.bonus_units || 0;
+  const maturity = p.extended_till
+    ? tile('Extended till', fmtDate(p.extended_till), `matured ${fmtDate(p.matures_on)} · extended in 5-year blocks`)
+    : p.matures_on
+      ? tile('Matures on', fmtDate(p.matures_on), [timeLeft(p.matures_on), p.opened_fy ? `opened in FY ${esc(p.opened_fy)}` : ''].filter(Boolean).join(' · '))
+      : tile('Matures on', '–', 'set the opening date with Edit PPF account');
+  return [
+    tile('Deposits', M(s.purchased), [thisFy?.deposit ? `${M(thisFy.deposit)} in FY ${esc(thisFy.fy)}` : 'nothing yet this financial year', s.redeemed ? `${M(s.redeemed)} withdrawn` : ''].filter(Boolean).join(' · ')),
+    tile('Interest credited', M(interest), [lastInterest ? `up to FY ${esc(lastInterest.fy)}${isNum(lastInterest.rate) ? ` at ${lastInterest.rate}%` : ''}` : 'none entered yet', p.pending_interest_fy ? `FY ${esc(p.pending_interest_fy)} pending` : ''].filter(Boolean).join(' · ')),
+    tile('XIRR', fmtPct(pct(s.xirr)), 'annualised · PPF interest is tax-free'),
+    maturity,
+  ].join('');
 }
 
 /** EPF: the four headline tiles (whole account or one share). */
@@ -676,26 +727,151 @@ function epfTiles(s, activeScheme, M, f) {
 
 /** EPF: one row per financial year, balances worked out from deposits and the interest entered. */
 /**
- * EPF: one stacked column per financial year - employee deposits, employer deposits and the interest credited
- * for that year - following the Share filter (share = 'EE' | 'ER' | undefined for the whole account).
+ * EPF / PPF: one stacked column per financial year. EPF: employee deposits, employer deposits and the interest
+ * credited, following the Share filter (share = 'EE' | 'ER' | undefined for the whole account); PPF: deposits
+ * and the interest credited.
  */
 function mountYearChart(f, share, currency) {
   const canvas = document.getElementById('year-chart');
-  const years = f.epf?.years || [];
+  const acct = f.epf || f.ppf;
+  const years = acct?.years || [];
   if (!canvas || !years.length) return;
   const t = themeTokens();
-  const pending = f.epf?.pending_interest_fy;
-  const series = [
-    share !== 'ER' ? { label: 'Employee deposits', data: years.map((y) => y.deposit_ee), color: t.series1 } : null,
-    share !== 'EE' ? { label: 'Employer deposits', data: years.map((y) => y.deposit_er), color: t.series2 } : null,
-    {
-      label: 'Interest credited',
-      data: years.map((y) => (share === 'ER' ? 0 : y.interest_ee) + (share === 'EE' ? 0 : y.interest_er)),
-      color: t.series3,
-      placeholder: (i) => (years[i].fy === pending ? 'pending' : null),
-    },
-  ].filter(Boolean);
+  const pending = acct.pending_interest_fy;
+  const placeholder = (i) => (years[i].fy === pending ? 'pending' : null);
+  const series = f.ppf
+    ? [
+        { label: 'Deposits', data: years.map((y) => y.deposit), color: t.series1 },
+        { label: 'Interest credited', data: years.map((y) => y.interest), color: t.series3, placeholder },
+      ]
+    : [
+        share !== 'ER' ? { label: 'Employee deposits', data: years.map((y) => y.deposit_ee), color: t.series1 } : null,
+        share !== 'EE' ? { label: 'Employer deposits', data: years.map((y) => y.deposit_er), color: t.series2 } : null,
+        { label: 'Interest credited', data: years.map((y) => (share === 'ER' ? 0 : y.interest_ee) + (share === 'EE' ? 0 : y.interest_er)), color: t.series3, placeholder },
+      ].filter(Boolean);
   state.yearChart = stackedColumns(canvas, years.map((y) => `FY ${y.fy}`), series, { currency, totalLabel: 'Year total' });
+}
+
+/** Sovereign Gold Bond: the bond's terms, the interest schedule and what has been received. */
+function goldCard(f, cur) {
+  const g = f.gold || {};
+  const d = f.details || {};
+  const M = (v, dec = 2) => fmtMoney(v, cur, dec);
+  const row = (label, value, sub = '') => (value ? `<tr><td class="nowrap"><b>${label}</b></td><td>${value}${sub ? `<div class="muted small">${sub}</div>` : ''}</td></tr>` : '');
+  const units = f.summary?.units || 0;
+  const rows = [
+    row('Series', d.series ? esc(d.series) : ''),
+    row('Code', d.code ? `<a href="https://www.google.com/finance/quote/${encodeURIComponent(d.code)}:NSE" target="_blank" rel="noopener">${esc(d.code)}</a>` : '', 'opens the Google Finance quote, where the current price is'),
+    row('Issue date', g.issue_date ? fmtDate(g.issue_date) : '', g.issue_date_assumed ? 'taken from the first purchase; set the real issue date with Edit gold bond if it differs' : d.issue_date_from === 'sgb' ? 'from the exchange list, accurate to the month; set the exact date from your allotment advice for precise interest dates' : ''),
+    row('Issue price', isNum(d.issue_price) ? `${M(d.issue_price)} per gram` : '<span class="muted">not set</span>', 'interest is paid on this price, not on what you paid after any discount'),
+    row('Interest', `${g.coupon ?? 2.5}% a year`, [isNum(g.interest_per_payment) ? `${M(g.interest_per_payment)} every six months on ${fmtNum(units, 3)} grams` : 'enter the issue price to see the amount of each payment', g.next_interest ? `next due ${fmtDate(g.next_interest)}` : ''].filter(Boolean).join(' · ')),
+    row('Interest received', M(g.interest_received || 0), `${g.interest_payments || 0} payment${g.interest_payments === 1 ? '' : 's'} so far${isNum(g.payments_left) ? ` · ${g.payments_left} to go` : ''}`),
+    row('Early redemption', g.exit_from ? `from ${fmtDate(g.exit_from)}` : '', 'RBI buys back from the fifth year, on an interest date, at the gold price; the bond can also be sold on the exchange at any time'),
+    row('Maturity', g.maturity ? fmtDate(g.maturity) : '', g.matured ? 'matured · redeemed at the gold price' : `${timeLeft(g.maturity) || 'due'} · redeemed at the gold price, free of capital gains tax`),
+    row('Price', g.price_source === 'sgb' ? `${M(g.price)} per gram · NSE last traded price` : g.price_source === 'manual' ? `${M(g.price)} per gram · entered by you` : '<span class="muted">none yet</span>',
+      g.price_source === 'sgb' ? `from ${g.price_feed === 'nse' ? 'NSE (nseindia.com)' : 'sgb.vercel.app, as NSE was unreachable'} as of ${fmtDate(g.price_date)}${g.exchange_name && g.exchange_name !== d.code ? ` · listed as ${esc(g.exchange_name)}` : ''} · refreshed with Refresh prices` : g.price_source === 'manual' ? `as of ${fmtDate(g.price_date)} · set the NSE code to price it from the exchange instead` : 'set the NSE code, or enter a gold price'),
+    row('IBJA gold price', isNum(g.ibja_price) ? `${M(g.ibja_price)} per gram` : '', [`RBI's redemption and early-exit rate${g.ibja_date ? ` · as of ${fmtDate(g.ibja_date)}` : ''}`, isNum(g.ibja_price) && isNum(g.price) ? `market price ${fmtPct((g.price / g.ibja_price - 1) * 100)} vs IBJA` : ''].filter(Boolean).join(' · ')),
+  ].join('');
+  return `
+    <section class="card">
+      <div class="card-head"><h2>Bond details</h2><span class="muted small">Sovereign Gold Bond terms: 2.5% interest a year on the issue price, eight-year tenor, early redemption from the fifth year</span></div>
+      <div class="table-wrap"><table class="data"><tbody>${rows}</tbody></table></div>
+    </section>`;
+}
+
+/** The gold price per gram (INR) that values every gold bond: enter today's, see and remove earlier entries. */
+async function openGoldPriceModal() {
+  let data;
+  try {
+    data = await api.get('/api/gold/price');
+  } catch (e) {
+    toast(`Could not load the gold price: ${e.message}`, 'error');
+    return;
+  }
+  const today = todayISO();
+  const list = (rows) => (rows.length
+    ? `<table class="data"><thead><tr><th>Date</th><th class="num">Price per gram</th><th></th></tr></thead><tbody>${rows.slice().reverse().slice(0, 12).map((r) => `<tr><td>${fmtDate(r.date)}</td><td class="num">${fmtINR(r.price, 2)}</td><td class="row-actions"><button type="button" class="link-btn danger-text" data-del-date="${r.date}">Delete</button></td></tr>`).join('')}</tbody></table>`
+    : '<p class="empty small">No gold price entered yet.</p>');
+  const modal = openModal('Gold price', `
+  <form id="txn-form" class="form" novalidate>
+    <p class="muted small">One price per gram, in rupees, shared by every gold bond. Take it from Google Finance (the bond's code), your broker, or the day's 24-carat gold rate; RBI redeems bonds at the IBJA 999 price.</p>
+    <div class="form-row">
+      <label class="field">Date
+        <input type="date" name="date" required value="${today}" max="${today}">
+      </label>
+      <label class="field">Price per gram (₹)
+        <input type="number" name="price" min="0.01" step="0.01" required placeholder="e.g. 8499" value="${isNum(data.price) ? data.price : ''}">
+      </label>
+    </div>
+    <div class="form-error" id="txn-form-error" hidden></div>
+    <div class="form-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Save price</button>
+    </div>
+    <div id="gold-price-list">${list(data.history || [])}</div>
+  </form>`);
+  const form = modal.querySelector('#txn-form');
+  form.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-del-date]');
+    if (!b) return;
+    try {
+      await api.del(`/api/gold/price/${b.dataset.delDate}`);
+      const fresh = await api.get('/api/gold/price');
+      modal.querySelector('#gold-price-list').innerHTML = list(fresh.history || []);
+      toast('Price removed');
+      render();
+    } catch (err) {
+      toast(`Delete failed: ${err.message}`, 'error');
+    }
+  });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = modal.querySelector('#txn-form-error');
+    err.hidden = true;
+    const body = { date: form.elements.date.value, price: parseFloat(form.elements.price.value) };
+    if (!body.date || !(body.price > 0)) { err.textContent = 'Enter the date and the price per gram.'; err.hidden = false; return; }
+    try {
+      await api.post('/api/gold/price', body);
+      closeModal();
+      toast(`Gold price ${fmtINR(body.price, 2)} per gram recorded for ${fmtDate(body.date)}`);
+      render();
+    } catch (e2) {
+      err.textContent = e2.message;
+      err.hidden = false;
+    }
+  });
+  form.elements.price.focus();
+}
+
+/** PPF: one row per financial year, the balance worked out from deposits and the interest entered. */
+function ppfYearTable(f, cur) {
+  const years = f.ppf?.years || [];
+  if (!years.length) return '';
+  const M = (v) => fmtMoney(v, cur);
+  const pending = f.ppf?.pending_interest_fy;
+  const rows = years
+    .map(
+      (y) => `
+      <tr>
+        <td class="nowrap"><b>${esc(y.fy)}</b></td>
+        <td class="num">${M(y.deposit)}</td>
+        <td class="num">${isNum(y.rate) ? `${y.rate}%` : '–'}</td>
+        <td class="num">${y.interest ? M(y.interest) : pending === y.fy ? '<span class="muted">pending</span>' : '–'}</td>
+        <td class="num">${y.withdrawn ? M(y.withdrawn) : '–'}</td>
+        <td class="num"><b>${M(y.closing)}</b></td>
+      </tr>`,
+    )
+    .join('');
+  return `
+    <section class="card">
+      <div class="card-head"><h2>By financial year</h2><span class="muted small">the balance is worked out from the deposits and the interest you enter; interest is credited on 31 March</span></div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>FY</th><th class="num">Deposits</th><th class="num">IR%</th><th class="num">Interest</th><th class="num">Withdrawn</th><th class="num">Closing balance</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </section>`;
 }
 
 function epfYearTable(f, cur) {
@@ -818,6 +994,9 @@ async function renderFund(id, folioKey, schemeKey) {
   const stock = k.key === 'STOCK';
   const nps = k.key === 'NPS';
   const epf = k.key === 'EPF';
+  const ppf = k.key === 'PPF';
+  const gold = k.key === 'GOLD';
+  const rupee = epf || ppf; // EPF and PPF: a rupee is a unit, interest is entered rather than priced
   const cur = f.currency || BASE;
   const foreign = Boolean(f.needs_fx);
   const b = foreign ? f.base : null; // converted figures, when an exchange rate is available
@@ -837,7 +1016,22 @@ async function renderFund(id, folioKey, schemeKey) {
     : folios.length === 1
       ? `${k.folio} <b>${esc(folios[0].label)}</b>`
       : f.folio_number ? `${k.folio} <b>${esc(f.folio_number)}</b>` : '';
-  const meta = (epf
+  const meta = (gold
+    ? [
+        folioText,
+        d.code ? `Code <b>${esc(d.code)}</b> · <a href="https://www.google.com/finance/quote/${encodeURIComponent(d.code)}:NSE" target="_blank" rel="noopener">Google Finance</a>` : '',
+        d.series ? esc(d.series) : '',
+        f.gold?.issue_date ? `issued ${fmtDate(f.gold.issue_date)}` : '',
+        goldMaturityText(f.gold),
+      ]
+    : ppf
+    ? [
+        f.folio_number ? `Account number <b>${esc(f.folio_number)}</b>` : folioText,
+        d.bank ? esc(d.bank) : '',
+        f.ppf?.opened_on ? `opened ${fmtDate(f.ppf.opened_on)}` : '',
+        ppfMaturityText(f.ppf),
+      ]
+    : epf
     ? [
         f.folio_number ? `UAN <b>${esc(f.folio_number)}</b>` : folioText,
         d.employer ? esc(d.employer) : '',
@@ -879,9 +1073,13 @@ async function renderFund(id, folioKey, schemeKey) {
   app.innerHTML = `
     ${navErrorBanner(f.nav_errors)}
     ${foreign && !b ? `<div class="banner warn">No ${esc(cur)} → ${esc(BASE)} exchange rate has been downloaded yet, so ${esc(BASE)} equivalents are not shown and this holding is left out of the portfolio totals. Click <b>Refresh prices</b> when you are online.</div>` : ''}
-    ${s.oversold_units > 0 ? `<div class="banner warn">${epf ? 'Withdrawals exceed the balance' : `Sales exceed the ${k.unit} bought`} by ${epf ? M(s.oversold_units, 2) : fmtNum(s.oversold_units, 4)}. Check the transactions${active ? ` in this ${k.folio.toLowerCase()}` : ''}: a ${epf ? 'withdrawal' : 'sale'} may be recorded before its ${epf ? 'deposit' : 'purchase'}, or against the wrong ${k.lower}.</div>` : ''}
+    ${s.oversold_units > 0 ? `<div class="banner warn">${rupee ? 'Withdrawals exceed the balance' : `Sales exceed the ${k.unit} bought`} by ${rupee ? M(s.oversold_units, 2) : fmtNum(s.oversold_units, 4)}. Check the transactions${active ? ` in this ${k.folio.toLowerCase()}` : ''}: a ${rupee ? 'withdrawal' : 'sale'} may be recorded before its ${rupee ? 'deposit' : 'purchase'}, or against the wrong ${k.lower}.</div>` : ''}
     ${epf && f.epf?.pending_interest_fy ? `<div class="banner warn">Interest for FY ${esc(f.epf.pending_interest_fy)} has not been entered yet, so the balance shows deposits only for that year. Add it with <b>Year interest</b> once EPFO credits it.</div>` : ''}
     ${epf && d.transferred_to ? `<div class="banner">You changed jobs${d.transferred_on ? ` on ${fmtDate(d.transferred_on)}` : ''}: the employee and employer shares, with their whole history, now live in <a href="#/fund/${Number(d.transferred_to)}">${esc(d.transferred_to_name || 'the new account')}</a>. Only the pension (EPS) record stays here.</div>` : ''}
+    ${ppf && f.ppf?.pending_interest_fy ? `<div class="banner warn">Interest for FY ${esc(f.ppf.pending_interest_fy)} has not been entered yet, so the balance shows deposits only for that year. Add it with <b>Year interest</b> once it is credited on 31 March.</div>` : ''}
+    ${gold && !isNum(s.latest_nav) ? `<div class="banner warn">This bond has no price yet, so it has no current value. ${d.code ? `Its code <b>${esc(d.code)}</b> could not be priced from the exchange list yet (offline, or the code is not listed): click <b>Refresh prices</b> when online, check the code under Edit gold bond, or ` : 'Set its NSE code under <b>Edit gold bond</b> to price it automatically, or '}click <b>Gold price</b> and enter today's price per gram.</div>` : ''}
+    ${gold && f.gold?.price_source === 'manual' && s.latest_nav_date && (Date.now() - new Date(`${s.latest_nav_date}T00:00:00`)) / 864e5 > 30 ? `<div class="banner">The gold price you entered is from ${fmtDate(s.latest_nav_date)}. Update it with <b>Gold price</b>, or set the bond's NSE code so it is priced from the exchange.</div>` : ''}
+    ${ppf && f.ppf?.extended_till ? `<div class="banner">This account matured on ${fmtDate(f.ppf.matures_on)}. It is shown as extended in five-year blocks, currently till ${fmtDate(f.ppf.extended_till)}; deposits and interest carry on as before.</div>` : ''}
     <a class="back-link" href="#/">← Portfolio</a>
     <div class="page-head">
       <div>
@@ -890,8 +1088,9 @@ async function renderFund(id, folioKey, schemeKey) {
         ${f.notes ? `<div class="notes">${esc(f.notes)}</div>` : ''}
       </div>
       <div class="head-actions">
-        ${!epf && !f.closed && s.units > 0 ? `<button type="button" class="btn ghost small" id="btn-exit" title="Sell everything you hold${active ? ` in this ${k.folio.toLowerCase()}` : ''}${activeScheme ? ` in scheme ${esc(activeScheme.scheme)}` : ''} and close the position">Exit${activeScheme ? ` scheme ${esc(activeScheme.scheme)}` : ''}</button>` : ''}
+        ${!rupee && !f.closed && s.units > 0 ? `<button type="button" class="btn ghost small" id="btn-exit" title="Sell everything you hold${active ? ` in this ${k.folio.toLowerCase()}` : ''}${activeScheme ? ` in scheme ${esc(activeScheme.scheme)}` : ''} and close the position">Exit${activeScheme ? ` scheme ${esc(activeScheme.scheme)}` : ''}</button>` : ''}
         ${epf && !d.transferred_to && f.transactions.length ? '<button type="button" class="btn ghost small" id="btn-epf-transfer" title="Changed jobs? Move the balance and its history to a new account under the same UAN">Moved jobs</button>' : ''}
+        ${gold ? '<button type="button" class="btn ghost small" id="btn-gold-price" title="Enter today\'s gold price per gram; it values every gold bond">Gold price</button>' : ''}
         <button type="button" class="btn ghost small" id="btn-edit-fund">Edit ${k.lower}</button>
         <button type="button" class="btn ghost small danger-text" id="btn-delete-fund">Delete</button>
       </div>
@@ -899,45 +1098,46 @@ async function renderFund(id, folioKey, schemeKey) {
     ${nps ? schemeFilter(f, schemeKey) : epf ? schemeFilter(f, schemeKey, (p) => esc(p.name), 'Share') : folioFilter(f, folioKey, k)}
     <section class="summary-grid">
       ${hero({
-        label: `${epf ? 'Current balance' : 'Current value'}${scope}`, value: s.current_value, profit: s.invested ? s.profit : null, absPct: s.abs_return_pct,
-        realised: epf ? 0 : s.realised_gain, dividends: s.dividends, currency: cur, realisedWhat: k.realisedWhat || 'from sales',
+        label: `${rupee ? 'Current balance' : 'Current value'}${scope}`, value: s.current_value, profit: s.invested ? s.profit : null, absPct: s.abs_return_pct,
+        realised: rupee ? 0 : s.realised_gain, dividends: s.dividends, currency: cur, realisedWhat: k.realisedWhat || 'from sales', dividendWord: k.dividendWord || 'dividends',
         approx: b ? `≈ ${fmtINR(bs.current_value)} · 1 ${esc(cur)} = ${fmtINR(b.rate, 2)} on ${fmtDate(b.rate_date)}` : '',
       })}
-      <div class="tiles">${epf ? epfTiles(s, activeScheme, M, f) : ''}
-        ${epf ? '' : tile(s.redeemed ? 'Investment in holdings' : 'Total investment', M(s.invested), [s.redeemed ? `${M(s.purchased)} ${nps ? 'contributed' : 'bought'} · ${M(s.redeemed)} ${k.sold}` : '', s.charges ? `${M(s.charges)} deducted as charges` : '', netOfDividends(s, M), s.bonus_units ? `${fmtNum(s.bonus_units, 4)} bonus ${k.unit} at no cost` : '', inBase(bs?.invested)].filter(Boolean).join(' · '))}
-        ${epf ? '' : tile(s.redeemed || s.dividends ? 'Unrealised profit' : 'Total profit', deltaValue(s.invested ? s.profit : null, cur), [isNum(s.abs_return_pct) ? `${fmtPct(s.abs_return_pct)} absolute` : '', realisedText(s, M, k.realisedWhat || 'from sales'), b && s.invested ? `${inBase(bs.profit)} in ${esc(BASE)}` : ''].filter(Boolean).join(' · '))}
-        ${epf ? '' : tile('XIRR', fmtPct(pct(s.xirr)), b ? `annualised in ${esc(cur)} · ${fmtPct(pct(bs.xirr))} in ${esc(BASE)}` : nps ? (activeScheme ? `annualised, scheme ${esc(activeScheme.scheme)} on its own` : 'annualised, whole account, on your own contributions') : 'annualised')}
-        ${epf ? '' : nps && !activeScheme
+      <div class="tiles">${epf ? epfTiles(s, activeScheme, M, f) : ppf ? ppfTiles(s, M, f) : ''}
+        ${rupee ? '' : tile(s.redeemed ? 'Investment in holdings' : 'Total investment', M(s.invested), [s.redeemed ? `${M(s.purchased)} ${nps ? 'contributed' : 'bought'} · ${M(s.redeemed)} ${k.sold}` : '', s.charges ? `${M(s.charges)} deducted as charges` : '', netOfDividends(s, M, k.dividendWord), s.bonus_units ? `${fmtNum(s.bonus_units, 4)} bonus ${k.unit} at no cost` : '', inBase(bs?.invested)].filter(Boolean).join(' · '))}
+        ${rupee ? '' : tile(s.redeemed || s.dividends ? 'Unrealised profit' : 'Total profit', deltaValue(s.invested ? s.profit : null, cur), [isNum(s.abs_return_pct) ? `${fmtPct(s.abs_return_pct)} absolute` : '', realisedText(s, M, k.realisedWhat || 'from sales', k.dividendWord), b && s.invested ? `${inBase(bs.profit)} in ${esc(BASE)}` : ''].filter(Boolean).join(' · '))}
+        ${rupee ? '' : tile('XIRR', fmtPct(pct(s.xirr)), b ? `annualised in ${esc(cur)} · ${fmtPct(pct(bs.xirr))} in ${esc(BASE)}` : nps ? (activeScheme ? `annualised, scheme ${esc(activeScheme.scheme)} on its own` : 'annualised, whole account, on your own contributions') : 'annualised')}
+        ${rupee ? '' : nps && !activeScheme
           ? tile('Latest NAVs', schemes.map((p) => `<span class="scheme-nav"><span class="chip">${esc(p.scheme)}</span>${isNum(p.summary.latest_nav) ? fmtNum(p.summary.latest_nav, 2) : '–'}</span>`).join(''), s.latest_nav_date ? `as of ${fmtDate(s.latest_nav_date)} · ${schemes.length} scheme${schemes.length === 1 ? '' : 's'}` : 'NAVs not fetched yet')
-          : tile(`Latest ${k.price}`, isNum(s.latest_nav) ? M(s.latest_nav, k.priceDecimals) : '–', s.latest_nav_date ? `as of ${fmtDate(s.latest_nav_date)} · ${fmtNum(s.units, 3)} ${k.unit} held` : `${k.price} not fetched yet`)}
+          : tile(`Latest ${k.price}`, isNum(s.latest_nav) ? M(s.latest_nav, k.priceDecimals) : '–', s.latest_nav_date ? `as of ${fmtDate(s.latest_nav_date)}${gold ? (f.gold?.price_source === 'sgb' ? ' · NSE traded price' : ' · entered by you') : ''} · ${fmtNum(s.units, 3)} ${k.unit} held` : gold ? 'no price yet' : `${k.price} not fetched yet`)}
       </div>
     </section>
-    ${nps ? schemeTable(f, schemeKey, cur) : epf ? epfYearTable(f, cur) : folioTable(f, folioKey, k, cur)}
-    ${epf && f.epf?.years?.length ? `<section class="card chart-card">
-      <div class="card-head"><h2>Deposits and interest by year${scope}</h2><span class="muted small">one column per financial year: employee deposits, employer deposits and the interest credited for that year</span></div>
-      <div class="chart-wrap short"><canvas id="year-chart" role="img" aria-label="Employee deposits, employer deposits and interest credited per financial year for ${esc(f.name)}${activeScheme ? `, ${esc(activeScheme.name)}` : ''}"></canvas></div>
+    ${nps ? schemeTable(f, schemeKey, cur) : epf ? epfYearTable(f, cur) : ppf ? ppfYearTable(f, cur) : folioTable(f, folioKey, k, cur)}
+    ${gold ? goldCard(f, cur) : ''}
+    ${(epf && f.epf?.years?.length) || (ppf && f.ppf?.years?.length) ? `<section class="card chart-card">
+      <div class="card-head"><h2>Deposits and interest by year${scope}</h2><span class="muted small">one column per financial year: ${epf ? 'employee deposits, employer deposits' : 'deposits'} and the interest credited for that year</span></div>
+      <div class="chart-wrap short"><canvas id="year-chart" role="img" aria-label="${epf ? 'Employee deposits, employer deposits' : 'Deposits'} and interest credited per financial year for ${esc(f.name)}${activeScheme ? `, ${esc(activeScheme.name)}` : ''}"></canvas></div>
     </section>` : ''}
     <section class="card chart-card">
-      <div class="card-head"><h2>${epf ? 'Balance over time' : 'Value over time'}${scope}${foreign ? ` <span class="muted small">in ${esc(cur)}</span>` : ''}</h2>${rangeButtons()}</div>
+      <div class="card-head"><h2>${rupee ? 'Balance over time' : 'Value over time'}${scope}${foreign ? ` <span class="muted small">in ${esc(cur)}</span>` : ''}</h2>${rangeButtons()}</div>
       <div class="chart-wrap"><canvas id="value-chart" role="img" aria-label="Current value and invested amount of ${esc(f.name)}${active ? ` ${k.folio.toLowerCase()} ${esc(active.label)}` : ''} over time"></canvas></div>
     </section>
     <section class="card">
       <div class="card-head"><h2>Transactions${scope}</h2>
         <div class="head-actions">
-          <button type="button" class="btn ghost small" id="btn-import-txn">${epf ? 'Import a year' : 'Import'}</button>
-          ${epf ? '<button type="button" class="btn ghost small" id="btn-epf-interest">Year interest</button><button type="button" class="btn ghost small" id="btn-epf-month">+ Add month</button>' : ''}
-          <button type="button" class="btn primary small" id="btn-add-txn">${epf ? '+ Add entry' : '+ Add transaction'}</button>
+          <button type="button" class="btn ghost small" id="btn-import-txn">${rupee ? 'Import a year' : 'Import'}</button>
+          ${epf ? '<button type="button" class="btn ghost small" id="btn-epf-interest">Year interest</button><button type="button" class="btn ghost small" id="btn-epf-month">+ Add month</button>' : ppf ? '<button type="button" class="btn ghost small" id="btn-epf-interest">Year interest</button>' : ''}
+          <button type="button" class="btn primary small" id="btn-add-txn">${rupee ? '+ Add entry' : '+ Add transaction'}</button>
         </div>
       </div>
       ${f.transactions.length
-        ? txnTable(f.transactions, k, cur, { showScheme: nps, epf })
+        ? txnTable(f.transactions, k, cur, { showScheme: nps, epf: rupee })
         : active || activeScheme
-          ? `<p class="empty">No ${epf ? 'entries' : 'transactions'} in this ${activeScheme ? (epf ? 'share' : 'scheme') : k.folio.toLowerCase()}.</p>`
-          : `<p class="empty">No ${epf ? 'entries' : 'transactions'} yet. ${epf ? 'Paste a financial year from your sheet with Import a year, or add months one at a time; enter each year\'s interest when EPFO credits it' : nps ? 'Add contributions one at a time, or paste your eNPS transaction statement with Import (one row per contribution, with units and NAV per scheme)' : stock ? 'Add purchases and sales one at a time, or use Import to paste a whole table' : 'Add SIP installments, lumpsum purchases or redemptions one at a time, or use Import to paste a whole table'}.</p>`}
+          ? `<p class="empty">No ${rupee ? 'entries' : 'transactions'} in this ${activeScheme ? (epf ? 'share' : 'scheme') : k.folio.toLowerCase()}.</p>`
+          : `<p class="empty">No ${rupee ? 'entries' : 'transactions'} yet. ${epf ? 'Paste a financial year from your sheet with Import a year, or add months one at a time; enter each year\'s interest when EPFO credits it' : ppf ? 'Paste a financial year from your sheet with Import a year, or add deposits one at a time; enter each year\'s interest when it is credited' : nps ? 'Add contributions one at a time, or paste your eNPS transaction statement with Import (one row per contribution, with units and NAV per scheme)' : stock ? 'Add purchases and sales one at a time, or use Import to paste a whole table' : 'Add SIP installments, lumpsum purchases or redemptions one at a time, or use Import to paste a whole table'}.</p>`}
     </section>`;
 
   mountChart(f.history, cur);
-  if (epf) mountYearChart(f, activeScheme?.scheme, cur);
+  if (rupee) mountYearChart(f, activeScheme?.scheme, cur);
   wireRange(app);
 
   app.querySelectorAll('[data-folio]').forEach((el) => {
@@ -955,6 +1155,7 @@ async function renderFund(id, folioKey, schemeKey) {
   document.getElementById('btn-epf-month')?.addEventListener('click', () => { const n = new Date(); openEpfGroupModal(fundForForms, { type: 'SIP', date: `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-15` }); });
   document.getElementById('btn-epf-interest')?.addEventListener('click', () => openEpfInterestModal(fundForForms));
   document.getElementById('btn-epf-transfer')?.addEventListener('click', () => openEpfTransferModal(f));
+  document.getElementById('btn-gold-price')?.addEventListener('click', () => openGoldPriceModal());
   document.getElementById('btn-exit')?.addEventListener('click', () => openTxnModal(fundForForms, null, { exitUnits: s.units, folios: folios.length, scoped: Boolean(active), scheme: activeScheme?.scheme || '' }));
   document.getElementById('btn-import-txn').addEventListener('click', () => openImportModal(fundForForms, render));
   document.getElementById('btn-edit-fund').addEventListener('click', () => openFundModal(f));
@@ -978,7 +1179,7 @@ async function renderFund(id, folioKey, schemeKey) {
       if (e.target.closest('.comment-text, .comment-add')) { startCommentEdit(e.target.closest('td'), entries[0], entries.slice(1)); return; }
       if (e.target.closest('[data-edit]')) openEpfGroupModal(fundForForms, { entries });
       if (e.target.closest('[data-del]')) {
-        const ok = await confirmDialog('Delete this row?', `${KINDS.EPF.types[entries[0].type] || entries[0].type} of ${fmtDate(entries[0].date)} (${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}) will be removed.`);
+        const ok = await confirmDialog('Delete this row?', `${k.types[entries[0].type] || entries[0].type} of ${fmtDate(entries[0].date)} (${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}) will be removed.`);
         if (!ok) return;
         try {
           await Promise.all(entries.map((t) => api.del(`/api/transactions/${t.id}`)));
@@ -997,7 +1198,7 @@ async function renderFund(id, folioKey, schemeKey) {
     if (e.target.closest('.comment-text, .comment-add')) { startCommentEdit(e.target.closest('td'), tx); return; }
     if (e.target.closest('[data-edit]')) openTxnModal(f, tx);
     if (e.target.closest('[data-del]')) {
-      const what = tx.type === 'BONUS' ? (epf ? `${k.types.BONUS} of ${M(tx.units, 2)}` : `${k.types.BONUS}: ${fmtNum(tx.units, 4)} ${k.unit}`) : `${k.types[tx.type] || tx.type} of ${M(tx.amount, 2)}`;
+      const what = tx.type === 'BONUS' ? (rupee ? `${k.types.BONUS} of ${M(tx.units, 2)}` : `${k.types.BONUS}: ${fmtNum(tx.units, 4)} ${k.unit}`) : `${k.types[tx.type] || tx.type} of ${M(tx.amount, 2)}`;
       const ok = await confirmDialog('Delete transaction?', `${what} on ${fmtDate(tx.date)} will be removed.`);
       if (!ok) return;
       try {
@@ -1018,6 +1219,8 @@ function fundFormHtml(f) {
   const stock = k.key === 'STOCK';
   const nps = k.key === 'NPS';
   const epf = k.key === 'EPF';
+  const ppf = k.key === 'PPF';
+  const gold = k.key === 'GOLD';
   const d = f.details || {};
   const txnCount = f.summary?.txn_count ?? 0;
   const schemeName = f.scheme?.scheme_name || (f.scheme_code ? `Scheme code ${f.scheme_code}` : '');
@@ -1033,6 +1236,8 @@ function fundFormHtml(f) {
         <label><input type="radio" name="kind" value="STOCK"> Stock / ETF</label>
         <label><input type="radio" name="kind" value="NPS"> NPS</label>
         <label><input type="radio" name="kind" value="EPF"> EPF</label>
+        <label><input type="radio" name="kind" value="PPF"> PPF</label>
+        <label><input type="radio" name="kind" value="GOLD"> Gold (SGB)</label>
       </div>
     </div>`}
     <div id="mf-fields" ${k.key !== 'MF' ? 'hidden' : ''}>
@@ -1072,13 +1277,13 @@ function fundFormHtml(f) {
       </div>` : ''}
       <div id="stock-search" ${editing ? 'hidden' : ''}>
         <label class="field">${editing ? 'Search for the correct stock' : 'Search stock or ETF'}
-          <input name="q_stock" placeholder="Company name or ticker, e.g. Reliance, Acme, AAPL" autocomplete="off">
+          <input name="q_stock" placeholder="Company name or ticker, e.g. Reliance, Infosys, AAPL" autocomplete="off">
           <span class="hint">Any exchange, any currency. Indian shares appear as NSE (.NS) and BSE (.BO) listings; pick the one you hold. Prices are tracked in the exchange's currency and the portfolio converts them to ${esc(BASE)} daily.</span>
         </label>
         <div id="stock-results" class="search-results" hidden></div>
       </div>
       <label class="field">Symbol
-        <input name="symbol" value="${esc(f.symbol ?? '')}" placeholder="e.g. RELIANCE.NS, ALL.AX, AAPL" autocapitalize="characters" autocomplete="off">
+        <input name="symbol" value="${esc(f.symbol ?? '')}" placeholder="e.g. RELIANCE.NS, BHP.AX, AAPL" autocapitalize="characters" autocomplete="off">
         <span class="hint" id="symbol-hint">${quoteName ? esc(`${quoteName} · ${quoteMeta}`) : 'Pick a search result, or type the symbol used by Yahoo Finance'}</span>
       </label>
     </div>
@@ -1105,14 +1310,50 @@ function fundFormHtml(f) {
     </div>
     <div id="epf-fields" ${epf ? '' : 'hidden'}>
       <label class="field">Employer (optional)
-        <input name="epf_employer" value="${esc(d.employer ?? '')}" placeholder="e.g. Acme">
+        <input name="epf_employer" value="${esc(d.employer ?? '')}" placeholder="e.g. Acme Ltd">
         <span class="hint">Your EPF balance is deposits plus the interest EPFO credits each year. You enter both (a financial year at a time from your sheet, or month by month); nothing is looked up online. The employer's pension-scheme (EPS) share is tracked separately and is not part of the balance.</span>
       </label>
     </div>
+    <div id="gold-fields" ${gold ? '' : 'hidden'}>
+      <label class="field">Pick the series from the exchange list
+        <select name="gold_pick"><option value="">Loading the Sovereign Gold Bond list…</option></select>
+        <span class="hint" id="gold-status">Prices come from NSE's own feed, issue dates and issue prices from sgb.vercel.app, and both refresh with the other prices. Picking a series fills in the fields below; you can still edit them.</span>
+      </label>
+      <label class="field">Series
+        <input name="gold_series" value="${esc(d.series ?? '')}" placeholder="e.g. Sovereign Gold Bonds 2021-22-Series-X">
+        <span class="hint">A bond is worth your grams × its price per gram: the series' NSE traded price when it has a code, otherwise the gold price you enter with <b>Gold price</b> on the bond's page. Interest of 2.5% a year on the issue price arrives every six months: record each payment as an Interest transaction.</span>
+      </label>
+      <div class="form-row">
+        <label class="field">NSE code
+          <input name="gold_code" value="${esc(d.code ?? '')}" placeholder="e.g. SGBMAR30X" autocapitalize="characters">
+          <span class="hint">Prices the bond from the exchange list. Leave empty to value it at a gold price you enter.</span>
+        </label>
+        <label class="field">Issue price per gram (₹, optional)
+          <input type="number" name="gold_issue_price" min="0" step="0.01" value="${d.issue_price ?? ''}" placeholder="e.g. 5109">
+          <span class="hint">The price interest is paid on (before any online discount).</span>
+        </label>
+      </div>
+      <label class="field">Issue date
+        <input type="date" name="gold_issue_date" value="${esc(d.issue_date ?? '')}">
+        <span class="hint">From the RBI press release or your allotment advice. It sets the interest dates, early redemption from the fifth year (filled into Locked until) and maturity after eight years. Leave empty to take the first purchase's date.</span>
+      </label>
+    </div>
+    <div id="ppf-fields" ${ppf ? '' : 'hidden'}>
+      <div class="form-row">
+        <label class="field">Bank / post office (optional)
+          <input name="ppf_bank" value="${esc(d.bank ?? '')}" placeholder="e.g. SBI, Post Office">
+          <span class="hint">A PPF balance is deposits plus the interest credited each year; you enter both (a financial year at a time from your sheet, or entry by entry). Nothing is looked up online.</span>
+        </label>
+        <label class="field">Account opened on
+          <input type="date" name="ppf_opened" value="${esc(d.opened ?? '')}">
+          <span class="hint">Sets the maturity: 15 financial years after the year of opening (opened in FY 2015-16, matures 1 April 2031). Leave empty to take the first deposit's date.</span>
+        </label>
+      </div>
+    </div>
     <div class="form-row">
-      <label class="field"><span id="folio-label">${epf ? 'UAN' : nps ? 'PRAN' : stock ? 'Default account (optional)' : 'Default folio number'}</span>
-        <input name="folio_number" value="${esc(f.folio_number ?? '')}" placeholder="${epf ? 'e.g. 100123456789' : nps ? 'e.g. 110012345678' : stock ? 'e.g. Zerodha, ESPP, demat no.' : 'e.g. 1234567/89'}">
-        <span class="hint" id="folio-hint">${epf ? 'Your Universal Account Number (optional).' : nps ? 'Your Permanent Retirement Account Number (optional).' : stock ? 'Broker or demat account; each transaction can carry its own.' : 'Pre-filled on new transactions; each transaction can still carry its own folio.'}</span>
+      <label class="field"><span id="folio-label">${gold ? 'Default folio (optional)' : ppf ? 'Account number' : epf ? 'UAN' : nps ? 'PRAN' : stock ? 'Default account (optional)' : 'Default folio number'}</span>
+        <input name="folio_number" value="${esc(f.folio_number ?? '')}" placeholder="${gold ? 'e.g. 87654321' : ppf ? 'e.g. 12345678901' : epf ? 'e.g. 100123456789' : nps ? 'e.g. 110012345678' : stock ? 'e.g. Zerodha, ESPP, demat no.' : 'e.g. 1234567/89'}">
+        <span class="hint" id="folio-hint">${gold ? 'The folio or demat account on your allotment advice; each purchase can carry its own.' : ppf ? 'Your PPF account number (optional).' : epf ? 'Your Universal Account Number (optional).' : nps ? 'Your Permanent Retirement Account Number (optional).' : stock ? 'Broker or demat account; each transaction can carry its own.' : 'Pre-filled on new transactions; each transaction can still carry its own folio.'}</span>
       </label>
       <label class="field">Display name
         <input name="name" required value="${esc(f.name ?? '')}" placeholder="Shown in your portfolio">
@@ -1157,7 +1398,7 @@ async function openFundModal(existing) {
   }
   const editing = Boolean(existing?.id);
   let kind = KINDS[existing?.kind] ? existing.kind : 'MF';
-  const modal = openModal(editing ? `Edit ${KINDS[kind].lower}` : 'Add a mutual fund, stock or NPS account', fundFormHtml(existing || {}));
+  const modal = openModal(editing ? `Edit ${KINDS[kind].lower}` : 'Add a holding', fundFormHtml(existing || {}));
   const form = modal.querySelector('#fund-form');
   const nameInput = form.elements.name;
   const folioInput = form.elements.folio_number;
@@ -1236,22 +1477,71 @@ async function openFundModal(existing) {
     const stock = kind === 'STOCK';
     const npsKind = kind === 'NPS';
     const epfKind = kind === 'EPF';
+    const ppfKind = kind === 'PPF';
+    const goldKind = kind === 'GOLD';
     modal.querySelector('#mf-fields').hidden = kind !== 'MF';
+    modal.querySelector('#ppf-fields').hidden = !ppfKind;
+    modal.querySelector('#gold-fields').hidden = !goldKind;
     modal.querySelector('#stock-fields').hidden = !stock;
     modal.querySelector('#nps-fields').hidden = !npsKind;
     modal.querySelector('#epf-fields').hidden = !epfKind;
-    modal.querySelector('#folio-label').textContent = epfKind ? 'UAN' : npsKind ? 'PRAN' : stock ? 'Default account (optional)' : 'Default folio number';
-    modal.querySelector('#folio-hint').textContent = epfKind ? 'Your Universal Account Number (optional).' : npsKind ? 'Your Permanent Retirement Account Number (optional).' : stock ? 'Broker or demat account; each transaction can carry its own.' : 'Pre-filled on new transactions; each transaction can still carry its own folio.';
-    folioInput.placeholder = epfKind ? 'e.g. 100123456789' : npsKind ? 'e.g. 110012345678' : stock ? 'e.g. Zerodha, ESPP, demat no.' : 'e.g. 1234567/89';
+    modal.querySelector('#folio-label').textContent = goldKind ? 'Default folio (optional)' : ppfKind ? 'Account number' : epfKind ? 'UAN' : npsKind ? 'PRAN' : stock ? 'Default account (optional)' : 'Default folio number';
+    modal.querySelector('#folio-hint').textContent = goldKind ? 'The folio or demat account on your allotment advice; each purchase can carry its own.' : ppfKind ? 'Your PPF account number (optional).' : epfKind ? 'Your Universal Account Number (optional).' : npsKind ? 'Your Permanent Retirement Account Number (optional).' : stock ? 'Broker or demat account; each transaction can carry its own.' : 'Pre-filled on new transactions; each transaction can still carry its own folio.';
+    folioInput.placeholder = goldKind ? 'e.g. 87654321' : ppfKind ? 'e.g. 12345678901' : epfKind ? 'e.g. 100123456789' : npsKind ? 'e.g. 110012345678' : stock ? 'e.g. Zerodha, ESPP, demat no.' : 'e.g. 1234567/89';
     if (npsKind) {
       loadNps();
       if (!editing) { form.elements.locked.value = tierSel.value === 'I' ? '1' : '0'; modal.querySelector('#lock-until-field').hidden = tierSel.value !== 'I'; }
     } else if (epfKind) {
       if (!editing) { form.elements.locked.value = '1'; modal.querySelector('#lock-until-field').hidden = false; if (!nameEdited) nameInput.value = 'EPF'; }
       form.elements.epf_employer.focus();
+    } else if (goldKind) {
+      if (!editing) { form.elements.locked.value = '1'; modal.querySelector('#lock-until-field').hidden = false; if (!nameEdited) nameInput.value = 'Sovereign Gold Bond'; }
+      loadSgb();
+      form.elements.gold_pick.focus();
+    } else if (ppfKind) {
+      if (!editing) { form.elements.locked.value = '1'; modal.querySelector('#lock-until-field').hidden = false; if (!nameEdited) nameInput.value = 'PPF'; }
+      form.elements.ppf_bank.focus();
     } else (stock ? form.elements.q_stock : form.elements.q).focus();
   };
   form.elements.epf_employer.addEventListener('input', () => { if (kind === 'EPF' && !editing && !nameEdited) nameInput.value = `EPF${form.elements.epf_employer.value.trim() ? ` · ${form.elements.epf_employer.value.trim()}` : ''}`; });
+  form.elements.ppf_bank.addEventListener('input', () => { if (kind === 'PPF' && !editing && !nameEdited) nameInput.value = `PPF${form.elements.ppf_bank.value.trim() ? ` · ${form.elements.ppf_bank.value.trim()}` : ''}`; });
+  // PPF: the opening date fills "Locked until" with the maturity, unless a date was typed by hand
+  let lockAuto = !form.elements.lock_in_until.value;
+  form.elements.lock_in_until.addEventListener('input', () => { lockAuto = !form.elements.lock_in_until.value; });
+  form.elements.ppf_opened.addEventListener('change', () => { if (kind === 'PPF' && lockAuto && form.elements.ppf_opened.value) form.elements.lock_in_until.value = ppfMaturityDate(form.elements.ppf_opened.value); });
+  form.elements.gold_series.addEventListener('input', () => { if (kind === 'GOLD' && !editing && !nameEdited) nameInput.value = form.elements.gold_series.value.trim() || 'Sovereign Gold Bond'; });
+  // ---- gold bond: the series list from the exchange (sgb.vercel.app)
+  const goldPick = form.elements.gold_pick;
+  const goldStatus = modal.querySelector('#gold-status');
+  let sgbIssues = null;
+  const money0 = (v) => (isNum(v) ? `₹${Math.round(v).toLocaleString('en-IN')}` : '–');
+  const loadSgb = async () => {
+    if (sgbIssues) return;
+    try {
+      sgbIssues = await api.get('/api/sgb/issues');
+    } catch (e) {
+      goldPick.innerHTML = '<option value="">List unavailable (offline?) · type the details by hand</option>';
+      goldStatus.textContent = `Could not load the bond list: ${e.message}. You can still type the code and details.`;
+      return;
+    }
+    const current = existingDetails?.code || '';
+    goldPick.innerHTML = `<option value="">Choose a series…</option>${sgbIssues.map((i) => `<option value="${esc(i.symbol)}" ${i.symbol === current ? 'selected' : ''}>${esc(i.symbol)} · issued ${i.issue_date ? fmtDate(i.issue_date) : '?'} at ${money0(i.face_value)} · now ${money0(i.ltp)}${i.matured ? ' · matured' : ''}</option>`).join('')}`;
+  };
+  goldPick.addEventListener('change', () => {
+    const i = sgbIssues?.find((x) => x.symbol === goldPick.value);
+    if (!i) return;
+    form.elements.gold_code.value = i.symbol;
+    form.elements.gold_series.value = i.name;
+    form.elements.gold_issue_price.value = isNum(i.face_value) ? i.face_value : '';
+    if (i.issue_date) {
+      form.elements.gold_issue_date.value = i.issue_date;
+      if (lockAuto) form.elements.lock_in_until.value = addYears(i.issue_date, 5);
+    }
+    if (!editing && !nameEdited) nameInput.value = i.name;
+  });
+  if (kind === 'GOLD') loadSgb();
+  // Gold bond: the issue date fills "Locked until" with the early-redemption date (five years on), unless typed by hand
+  form.elements.gold_issue_date.addEventListener('change', () => { if (kind === 'GOLD' && lockAuto && form.elements.gold_issue_date.value) form.elements.lock_in_until.value = addYears(form.elements.gold_issue_date.value, 5); });
   form.querySelectorAll('input[name="kind"]').forEach((r) => r.addEventListener('change', () => setKind(r.value)));
   if (kind === 'NPS') loadNps();
 
@@ -1440,7 +1730,7 @@ async function openFundModal(existing) {
       return;
     }
     if (stock && !body.symbol) {
-      err.textContent = 'Pick a stock from the search, or type its symbol (e.g. RELIANCE.NS, ALL.AX, AAPL).';
+      err.textContent = 'Pick a stock from the search, or type its symbol (e.g. RELIANCE.NS, BHP.AX, AAPL).';
       err.hidden = false;
       return;
     }
@@ -1460,6 +1750,21 @@ async function openFundModal(existing) {
     if (kind === 'EPF') {
       body.details = { employer: String(fd.get('epf_employer') || '').trim() };
       if (!body.name) body.name = `EPF${body.details.employer ? ` · ${body.details.employer}` : ''}`;
+    }
+    if (kind === 'PPF') {
+      body.details = { bank: String(fd.get('ppf_bank') || '').trim(), opened: String(fd.get('ppf_opened') || '') || null };
+      if (!body.name) body.name = `PPF${body.details.bank ? ` · ${body.details.bank}` : ''}`;
+    }
+    if (kind === 'GOLD') {
+      body.details = {
+        series: String(fd.get('gold_series') || '').trim(),
+        code: String(fd.get('gold_code') || '').trim().toUpperCase(),
+        issue_date: String(fd.get('gold_issue_date') || '') || null,
+        issue_date_from: String(fd.get('gold_issue_date') || '') && String(fd.get('gold_issue_date')) === (sgbIssues?.find((x) => x.symbol === String(fd.get('gold_code') || '').trim().toUpperCase())?.issue_date || existingDetails?.issue_date_from === 'sgb' && existingDetails?.issue_date) ? 'sgb' : null,
+        issue_price: fd.get('gold_issue_price') ? Number(fd.get('gold_issue_price')) : null,
+        isin: existingDetails?.isin || null,
+      };
+      if (!body.name) body.name = body.details.series || 'Sovereign Gold Bond';
     }
     if (!body.name) body.name = stock ? stockInfo?.name || body.symbol : selected.name || '';
     if (!body.name) {
@@ -1494,9 +1799,10 @@ function txnFormHtml(fund, tx, exit = null) {
   const today = todayISO();
   const k = kindOf(fund);
   const stock = k.key === 'STOCK';
+  const gold = k.key === 'GOLD';
   const nps = k.key === 'NPS';
   const cur = fund.currency || BASE;
-  const type = tx.type || (stock ? 'LUMPSUM' : 'SIP');
+  const type = tx.type || (stock || gold ? 'LUMPSUM' : 'SIP');
   const letters = nps ? Object.keys(fund.details?.schemes || {}) : [];
   const schemeNow = tx.scheme || exit?.scheme || fund.scheme || letters[0] || '';
   const exitNote = exit
@@ -1505,6 +1811,8 @@ function txnFormHtml(fund, tx, exit = null) {
   const opt = (value, label) => `<option value="${value}" ${type === value ? 'selected' : ''}>${label}</option>`;
   const typeOptions = nps
     ? opt('SIP', 'Contribution') + opt('LUMPSUM', 'Lumpsum contribution') + opt('REDEMPTION', 'Withdrawal') + opt('SWITCH_IN', 'Switch in (rebalance into this scheme)') + opt('SWITCH_OUT', 'Switch out (rebalance out of this scheme)') + opt('CHARGE', 'Charges (units deducted)')
+    : gold
+      ? opt('LUMPSUM', 'Purchase') + opt('REDEMPTION', 'Redemption / sale') + opt('DIVIDEND', 'Interest received') + opt('SIP', 'SIP (purchase)') + opt('BONUS', 'Bonus units')
     : stock
       ? opt('LUMPSUM', 'Buy') + opt('REDEMPTION', 'Sell') + opt('SIP', 'SIP (buy)') + opt('DIVIDEND', 'Dividend received') + opt('BONUS', 'Bonus / free shares') + opt('CHARGE', 'Charges (shares deducted)')
       : opt('SIP', 'SIP (purchase)') + opt('LUMPSUM', 'Lumpsum (purchase)') + opt('REDEMPTION', 'Redemption (sell)') + opt('DIVIDEND', 'Dividend / IDCW payout') + opt('BONUS', 'Bonus units') + opt('CHARGE', 'Charges (units deducted)');
@@ -1567,47 +1875,50 @@ function txnFormHtml(fund, tx, exit = null) {
  * edited together; a cleared amount deletes that entry, a newly filled one creates it.
  * entries: the existing entries of the row (empty when adding); date / type seed a new row.
  */
+/** EPF / PPF: one dialog for one date. EPF has employee, employer and pension boxes (a whole month); PPF has a
+ * single amount. Editing a row updates, removes or adds the entries behind it. */
 function openEpfGroupModal(fund, { entries = [], date, type } = {}) {
+  const ppf = fund.kind === 'PPF';
   const cur = fund.currency || BASE;
   const today = todayISO();
   const editing = entries.length > 0;
   const first = entries[0];
   const t0 = first?.type || type || 'SIP';
   const d0 = first?.date || date || today;
-  const by = Object.fromEntries(entries.map((t) => [t.scheme, t]));
+  const by = Object.fromEntries(entries.map((t) => [t.scheme || '', t]));
   const amountOf = (t) => (t ? (t.type === 'BONUS' ? t.units : t.amount) : '');
   const rate0 = entries.find((t) => isNum(t.rate))?.rate ?? (fund.transactions || []).find((t) => isNum(t.rate))?.rate ?? '';
   const notes0 = entries.find((t) => t.notes)?.notes || '';
   const opt = (v, l) => `<option value="${v}" ${t0 === v ? 'selected' : ''}>${l}</option>`;
-  const modal = openModal(editing ? `Edit ${fmtDate(d0)} · ${esc(fund.name)}` : `Add a month · ${esc(fund.name)}`, `
+  const shares = ppf
+    ? [{ key: '', label: `Amount (${esc(cur)})`, placeholder: 'e.g. 5000', hint: '' }]
+    : [
+        { key: 'EE', label: `Employee share (${esc(cur)})`, placeholder: 'e.g. 1800', hint: '' },
+        { key: 'ER', label: `Employer share (${esc(cur)})`, placeholder: 'e.g. 550', hint: "The employer's EPF share only, without the pension part." },
+        { key: 'EPS', label: `Pension (EPS) contribution (${esc(cur)})`, placeholder: 'e.g. 1250', hint: 'Tracked separately; not part of the balance.' },
+      ];
+  const field = (sh) => `<label class="field">${sh.label}
+        <input type="number" name="amt_${sh.key}" min="0" step="0.01" value="${amountOf(by[sh.key])}" placeholder="${sh.placeholder}">
+        ${sh.hint ? `<span class="hint" id="hint-${sh.key}">${sh.hint}</span>` : ''}
+      </label>`;
+  const rateField = `<label class="field">Interest rate % (optional)
+        <input type="number" name="rate" min="0" max="100" step="0.01" value="${rate0}" placeholder="e.g. ${ppf ? '7.1' : '8.25'}">
+      </label>`;
+  const amountRows = ppf
+    ? `<div class="form-row">${field(shares[0])}${rateField}</div>`
+    : `<div class="form-row">${field(shares[0])}${field(shares[1])}</div><div class="form-row">${field(shares[2])}${rateField}</div>`;
+  const modal = openModal(editing ? `Edit ${fmtDate(d0)} · ${esc(fund.name)}` : `${ppf ? 'Add an entry' : 'Add a month'} · ${esc(fund.name)}`, `
   <form id="txn-form" class="form" novalidate>
     <div class="form-row">
       <label class="field">Date
         <input type="date" name="date" required value="${d0}" max="${today}">
-        <span class="hint">Deposits go on the 15th of the month, the year's interest on 31 March.</span>
+        <span class="hint">${ppf ? "Deposits made by the 5th earn that month's interest; the year's interest goes on 31 March." : "Deposits go on the 15th of the month, the year's interest on 31 March."}</span>
       </label>
       <label class="field">Type
         <select name="type">${opt('SIP', 'Deposit')}${opt('LUMPSUM', 'Transfer in / opening balance')}${opt('BONUS', 'Interest credited')}${opt('REDEMPTION', 'Withdrawal')}</select>
       </label>
     </div>
-    <div class="form-row">
-      <label class="field">Employee share (${esc(cur)})
-        <input type="number" name="ee" min="0" step="0.01" value="${amountOf(by.EE)}" placeholder="e.g. 1800">
-      </label>
-      <label class="field">Employer share (${esc(cur)})
-        <input type="number" name="er" min="0" step="0.01" value="${amountOf(by.ER)}" placeholder="e.g. 550">
-        <span class="hint">The employer's EPF share only, without the pension part.</span>
-      </label>
-    </div>
-    <div class="form-row">
-      <label class="field">Pension (EPS) contribution (${esc(cur)})
-        <input type="number" name="eps" min="0" step="0.01" value="${amountOf(by.EPS)}" placeholder="e.g. 1250">
-        <span class="hint" id="eps-hint">Tracked separately; not part of the balance.</span>
-      </label>
-      <label class="field">Interest rate % (optional)
-        <input type="number" name="rate" min="0" max="100" step="0.01" value="${rate0}" placeholder="e.g. 8.25">
-      </label>
-    </div>
+    ${amountRows}
     <label class="field">Comment
       <input name="notes" value="${esc(notes0)}" maxlength="500" placeholder="Optional">
     </label>
@@ -1622,9 +1933,10 @@ function openEpfGroupModal(fund, { entries = [], date, type } = {}) {
   const form = modal.querySelector('#txn-form');
   const typeSel = form.elements.type;
   const applyType = () => {
+    if (ppf) return;
     const bonus = typeSel.value === 'BONUS';
-    form.elements.eps.disabled = bonus;
-    modal.querySelector('#eps-hint').textContent = bonus ? 'The pension scheme earns no interest.' : 'Tracked separately; not part of the balance.';
+    form.elements.amt_EPS.disabled = bonus;
+    modal.querySelector('#hint-EPS').textContent = bonus ? 'The pension scheme earns no interest.' : 'Tracked separately; not part of the balance.';
   };
   typeSel.addEventListener('change', applyType);
   applyType();
@@ -1637,18 +1949,18 @@ function openEpfGroupModal(fund, { entries = [], date, type } = {}) {
     const t = typeSel.value;
     if (!d) return fail('A date is required.');
     const num = (name) => parseFloat(form.elements[name].value) || 0;
-    const values = { EE: num('ee'), ER: num('er'), EPS: t === 'BONUS' ? 0 : num('eps') };
-    if (!Object.values(values).some((v) => v > 0)) return fail('Enter at least one amount.');
+    const values = Object.fromEntries(shares.map((sh) => [sh.key, sh.key === 'EPS' && t === 'BONUS' ? 0 : num(`amt_${sh.key}`)]));
+    if (!Object.values(values).some((v) => v > 0)) return fail(ppf ? 'Enter the amount.' : 'Enter at least one amount.');
     const rate = form.elements.rate.value ? parseFloat(form.elements.rate.value) : null;
     const notes = form.elements.notes.value.trim();
     const folio = form.elements.folio_number.value.trim();
     const ops = [];
     const creates = [];
-    for (const scheme of ['EE', 'ER', 'EPS']) {
-      const v = values[scheme];
-      const body = { date: d, folio_number: folio, scheme, type: t, amount: t === 'BONUS' ? 0 : v, units: v, nav: 1, rate, notes };
-      if (by[scheme] && v > 0) ops.push(api.put(`/api/transactions/${by[scheme].id}`, body));
-      else if (by[scheme]) ops.push(api.del(`/api/transactions/${by[scheme].id}`));
+    for (const sh of shares) {
+      const v = values[sh.key];
+      const body = { date: d, folio_number: folio, scheme: sh.key, type: t, amount: t === 'BONUS' ? 0 : v, units: v, nav: 1, rate, notes };
+      if (by[sh.key] && v > 0) ops.push(api.put(`/api/transactions/${by[sh.key].id}`, body));
+      else if (by[sh.key]) ops.push(api.del(`/api/transactions/${by[sh.key].id}`));
       else if (v > 0) creates.push(body);
     }
     if (creates.length) ops.push(api.post(`/api/funds/${fund.id}/transactions/bulk`, { transactions: creates }));
@@ -1657,7 +1969,7 @@ function openEpfGroupModal(fund, { entries = [], date, type } = {}) {
     try {
       await Promise.all(ops);
       closeModal();
-      toast(editing ? 'Month updated' : 'Month added');
+      toast(editing ? (ppf ? 'Entry updated' : 'Month updated') : (ppf ? 'Entry added' : 'Month added'));
       render();
     } catch (e2) {
       fail(e2.message);
@@ -1721,15 +2033,20 @@ function openEpfTransferModal(fund) {
   });
 }
 
-/** EPF: the interest EPFO credited for one financial year, dated 31 March. */
+/** EPF / PPF: the interest credited for one financial year, dated 31 March. */
 function openEpfInterestModal(fund) {
+  const ppf = fund.kind === 'PPF';
+  const acct = fund.epf || fund.ppf || {};
   const cur = fund.currency || BASE;
-  const years = fund.epf?.years || [];
-  const fyNow = Number((fund.epf?.current_fy || '').slice(0, 4)) || new Date().getFullYear();
+  const years = acct.years || [];
+  const fyNow = Number((acct.current_fy || '').slice(0, 4)) || new Date().getFullYear();
   const starts = [...new Set([...years.map((y) => Number(y.fy.slice(0, 4))), fyNow - 1, fyNow])].sort((a, b) => b - a);
-  const pending = fund.epf?.pending_interest_fy;
+  const pending = acct.pending_interest_fy;
   const chosen = pending ? Number(pending.slice(0, 4)) : fyNow - 1;
   const recorded = (fy) => (fund.transactions || []).filter((t) => t.type === 'BONUS' && fyOfDate(t.date) === fyLabel(fy));
+  const shares = ppf
+    ? [['', `Interest credited (${esc(cur)})`, 'e.g. 232']]
+    : [['EE', `Interest on the employee share (${esc(cur)})`, 'e.g. 606'], ['ER', `Interest on the employer share (${esc(cur)})`, 'e.g. 249']];
   const modal = openModal(`Year interest · ${esc(fund.name)}`, `
   <form id="txn-form" class="form" novalidate>
     <div class="form-row">
@@ -1738,16 +2055,13 @@ function openEpfInterestModal(fund) {
         <span class="hint">Credited on 31 March of that year.</span>
       </label>
       <label class="field">Interest rate % (optional)
-        <input type="number" name="rate" min="0" max="100" step="0.01" placeholder="e.g. 8.25">
+        <input type="number" name="rate" min="0" max="100" step="0.01" placeholder="e.g. ${ppf ? '7.1' : '8.25'}">
       </label>
     </div>
     <div class="form-row">
-      <label class="field">Interest on the employee share (${esc(cur)})
-        <input type="number" name="ee" min="0" step="0.01" placeholder="e.g. 606">
-      </label>
-      <label class="field">Interest on the employer share (${esc(cur)})
-        <input type="number" name="er" min="0" step="0.01" placeholder="e.g. 249">
-      </label>
+      ${shares.map(([key, label, ph]) => `<label class="field">${label}
+        <input type="number" name="int_${key}" min="0" step="0.01" placeholder="${ph}">
+      </label>`).join('')}
     </div>
     <div class="form-error" id="txn-form-error" hidden></div>
     <div class="form-actions">
@@ -1763,12 +2077,11 @@ function openEpfInterestModal(fund) {
     const fail = (msg) => { err.textContent = msg; err.hidden = false; };
     const fy = Number(form.elements.fy.value);
     const rate = form.elements.rate.value ? parseFloat(form.elements.rate.value) : null;
-    const ee = parseFloat(form.elements.ee.value) || 0;
-    const er = parseFloat(form.elements.er.value) || 0;
-    if (!(ee > 0) && !(er > 0)) return fail('Enter the interest credited on at least one share.');
+    const amounts = shares.map(([key]) => [key, parseFloat(form.elements[`int_${key}`].value) || 0]);
+    if (!amounts.some(([, a]) => a > 0)) return fail(ppf ? 'Enter the interest credited.' : 'Enter the interest credited on at least one share.');
     if (recorded(fy).length) return fail(`Interest for FY ${fyLabel(fy)} is already recorded; edit or delete those entries in the table instead.`);
     const date = `${fy + 1}-03-31`;
-    const items = [['EE', ee], ['ER', er]].filter(([, a]) => a > 0).map(([scheme, a]) => ({ date, folio_number: fund.folio_number || '', scheme, type: 'BONUS', amount: 0, units: a, nav: 1, rate, notes: `Interest for FY ${fyLabel(fy)}` }));
+    const items = amounts.filter(([, a]) => a > 0).map(([scheme, a]) => ({ date, folio_number: fund.folio_number || '', scheme, type: 'BONUS', amount: 0, units: a, nav: 1, rate, notes: `Interest for FY ${fyLabel(fy)}` }));
     const btn = form.querySelector('button[type="submit"]');
     btn.disabled = true;
     try {
@@ -1785,8 +2098,9 @@ function openEpfInterestModal(fund) {
 
 function openTxnModal(fund, existing, opts = {}) {
   const k = kindOf(fund);
-  if (k.key === 'EPF') return openEpfGroupModal(fund, existing ? { entries: [existing] } : {});
+  if (k.key === 'EPF' || k.key === 'PPF') return openEpfGroupModal(fund, existing ? { entries: [existing] } : {});
   const stock = k.key === 'STOCK';
+  const gold = k.key === 'GOLD';
   const cur = fund.currency || BASE;
   const nps = k.key === 'NPS';
   const exit = !existing && isNum(opts.exitUnits) && opts.exitUnits > 0 ? { units: opts.exitUnits, folios: opts.folios || 0, scoped: Boolean(opts.scoped), scheme: opts.scheme || '' } : null;
@@ -1854,16 +2168,18 @@ function openTxnModal(fund, existing, opts = {}) {
     if (nps && !schemeId) { hint.textContent = 'Pick a scheme to look up its NAV.'; return; }
     hint.textContent = `Looking up ${k.price.toLowerCase()}…`;
     try {
-      const r = stock
+      const r = gold
+        ? await api.get(`/api/gold/price?on=${date.value}`)
+        : stock
         ? await api.get(`/api/stocks/${encodeURIComponent(fund.symbol)}/quote?on=${date.value}`)
         : nps
           ? await api.get(`/api/nps/${encodeURIComponent(schemeId)}/nav?on=${date.value}`)
           : await api.get(`/api/schemes/${fund.scheme_code}/nav?on=${date.value}`);
       if (my !== seq) return;
-      const price = stock ? r.price : r.nav;
+      const price = stock || gold ? r.price : r.nav;
       nav.value = stock ? Number(price.toFixed(4)) : price;
       hint.textContent = r.date === date.value
-        ? `${k.price} on ${fmtDate(r.date)}${stock ? ' (closing price)' : ''}`
+        ? `${k.price} on ${fmtDate(r.date)}${stock ? ' (closing price)' : gold ? ' (gold price you entered)' : ''}`
         : `No ${k.price.toLowerCase()} on ${fmtDate(date.value)}; using ${fmtDate(r.date)}. Adjust if your statement differs.`;
       recompute();
     } catch (e) {
@@ -1984,6 +2300,7 @@ function renderLock() {
       <div class="auth-icon">${SHIELD_ICON}</div>
       <h1>Unlock your portfolio</h1>
       <p class="muted">Your data is encrypted on this computer. Enter your password to open it.</p>
+      ${authInfo.notice?.message ? `<div class="banner warn" style="text-align:left">${esc(authInfo.notice.message)}</div>` : ''}
       <form id="unlock-form" class="form" novalidate>
         <label class="field">Password
           <input type="password" name="password" autocomplete="current-password" required>
@@ -1992,9 +2309,13 @@ function renderLock() {
         <div class="form-actions"><button type="submit" class="btn primary">Unlock</button></div>
       </form>
       <p class="footnote">There is no password recovery. If the password is lost, the data cannot be opened.${idle ? ` The app locks itself after ${idle} minutes without use.` : ''}${authInfo.version ? ` Version ${authInfo.version}.` : ''}</p>
+      ${dataFolderLine()}
     </section>`;
   const form = document.getElementById('unlock-form');
   const err = document.getElementById('auth-error');
+  document.getElementById('btn-data-dir')?.addEventListener('click', openDataDirModal);
+  document.getElementById('btn-cloud-lock')?.addEventListener('click', openCloudModal);
+  cloudHint();
   form.elements.password.focus();
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -2014,6 +2335,181 @@ function renderLock() {
       btn.textContent = 'Unlock';
     }
   });
+}
+
+/** Where the vault file is, with a way to change it (shown on the lock and setup screens). */
+function dataFolderLine() {
+  if (!authInfo.vault_path) return '';
+  return `<p class="footnote">Vault file: <code>${esc(authInfo.vault_path)}</code> · <button type="button" class="link-btn" id="btn-data-dir">Change folder…</button> · <button type="button" class="link-btn" id="btn-cloud-lock">Cloud backup…</button></p><div id="cloud-hint"></div>`;
+}
+
+const PROVIDER_ORDER = ['google', 'onedrive', 'dropbox'];
+const fmtWhen = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '');
+const fmtBytes = (n) => (isNum(n) ? (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`) : '');
+
+/** On the lock screen: when a provider holds a copy saved more recently by another device, offer to restore it. */
+async function cloudHint() {
+  const box = document.getElementById('cloud-hint');
+  if (!box) return;
+  let st;
+  try { st = await api.get('/api/cloud/status?check=true'); } catch { return; }
+  const newer = PROVIDER_ORDER.map((k) => [k, st.providers[k]]).filter(([, p]) => p.connected && p.newer_remote);
+  const failed = PROVIDER_ORDER.map((k) => [k, st.providers[k]]).filter(([, p]) => p.connected && p.last_error);
+  if (!document.getElementById('cloud-hint')) return;
+  box.innerHTML = [
+    ...newer.map(([k, p]) => `<div class="banner" style="text-align:left">A newer copy of the vault is in <b>${esc(p.label)}</b>, saved ${fmtWhen(p.remote.modified)}${p.remote.device ? ` from ${esc(p.remote.device)}` : ''}; this device's file is from ${fmtWhen(st.local?.modified)}. <button type="button" class="link-btn" data-restore="${k}">Restore it here</button></div>`),
+    ...failed.map(([, p]) => `<div class="banner warn" style="text-align:left">The last backup to ${esc(p.label)} failed: ${esc(p.last_error)}</div>`),
+  ].join('');
+  box.querySelectorAll('[data-restore]').forEach((b) => b.addEventListener('click', () => restoreFrom(b.dataset.restore, st.providers[b.dataset.restore].label)));
+}
+
+async function restoreFrom(provider, label) {
+  const ok = await confirmDialog(`Restore from ${esc(label)}?`, `The vault file on this device will be replaced by the copy in ${esc(label)}. The current file is kept beside it as <code>portfolio.before-restore-…enc</code>, so nothing is lost, and you unlock with the restored file's password.`);
+  if (!ok) return;
+  try {
+    await api.post('/api/cloud/restore', { provider });
+    closeModal();
+    toast(`Vault restored from ${label}`);
+    boot();
+  } catch (e) {
+    toast(`Restore failed: ${e.message}`, 'error');
+  }
+}
+
+/** Back up to Google Drive, OneDrive or Dropbox: set up each provider once, connect, then every change is uploaded. */
+async function openCloudModal() {
+  const modal = openModal('Cloud backup', '<p class="empty small">Loading…</p>', { wide: true });
+  const box = modal.querySelector('.modal-body') || modal;
+  let polling = null;
+  const stopPolling = () => { if (polling) { clearInterval(polling); polling = null; } };
+
+  const providerHtml = (key, p, st) => {
+    const remote = p.remote
+      ? `in the cloud: ${fmtWhen(p.remote.modified)}${p.remote.device ? ` from ${esc(p.remote.device)}` : ''} · ${fmtBytes(p.remote.size)}`
+      : p.remote_error ? `could not check the cloud copy: ${esc(p.remote_error)}` : p.connected ? 'no backup in the cloud yet' : '';
+    const line = p.connected
+      ? `Connected as <b>${esc(p.account || '')}</b>${p.last_backup ? ` · last backup ${fmtWhen(p.last_backup)} (${fmtBytes(p.last_size)})` : ' · not backed up yet'}${p.last_error ? ` · <span class="danger-text">last attempt failed: ${esc(p.last_error)}</span>` : ''}`
+      : p.configured ? 'Set up, not connected' : 'Not set up';
+    return `
+    <div class="cloud-provider" data-provider="${key}">
+      <div class="head"><b>${esc(p.label)}</b><span class="muted small">${line}</span></div>
+      ${p.connected && p.newer_remote ? `<div class="banner small">A newer copy was saved ${fmtWhen(p.remote.modified)}${p.remote.device ? ` from ${esc(p.remote.device)}` : ''}; this device's file is from ${fmtWhen(st.local?.modified)}.</div>` : ''}
+      ${remote ? `<div class="muted small">${remote}</div>` : ''}
+      <div class="head-actions" style="margin-top:8px">
+        ${p.connected ? `<button type="button" class="btn ghost small" data-act="backup">Back up now</button><button type="button" class="btn ghost small" data-act="restore" ${p.remote ? '' : 'disabled'}>Restore from ${esc(p.label)}</button><button type="button" class="btn ghost small danger-text" data-act="disconnect">Disconnect</button>` : `<button type="button" class="btn primary small" data-act="connect" ${p.configured ? '' : 'disabled'}>Connect ${esc(p.label)}</button>`}
+        <button type="button" class="btn ghost small" data-act="setup">${p.configured ? 'Change setup' : 'Set up…'}</button>
+      </div>
+      <form class="form cloud-setup" hidden>
+        <p class="muted small">${esc(p.setup)} <a href="${esc(p.console)}" target="_blank" rel="noopener">Open the console</a>.</p>
+        <div class="form-row">
+          <label class="field">Client ID<input name="client_id" value="${esc(p.client_id || '')}" maxlength="300" autocomplete="off"></label>
+          ${p.needs_secret ? `<label class="field">Client secret<input name="client_secret" type="password" maxlength="300" autocomplete="off" placeholder="${p.configured ? '(unchanged)' : ''}"></label>` : ''}
+        </div>
+        <div class="form-error" hidden></div>
+        <div class="form-actions"><button type="button" class="btn ghost small" data-act="setup-cancel">Cancel</button><button type="submit" class="btn primary small">Save</button></div>
+      </form>
+    </div>`;
+  };
+
+  async function render(check = true) {
+    let st;
+    try { st = await api.get(`/api/cloud/status?check=${check}`); } catch (e) { box.innerHTML = `<p class="form-error">${esc(e.message)}</p>`; return; }
+    box.innerHTML = `
+      <p class="muted small">The vault file is encrypted before it leaves this device, so the cloud only ever holds ciphertext. Connect a provider once through its normal sign-in page; after that every change is backed up there a few seconds later, and any other device can restore the latest copy. The app only has access to its own folder, never to your other files. This device: <b>${esc(st.device)}</b>${st.local ? ` · vault file ${fmtWhen(st.local.modified)} (${fmtBytes(st.local.size)})` : ''}.</p>
+      ${PROVIDER_ORDER.map((k) => providerHtml(k, st.providers[k], st)).join('')}
+      <div class="form-actions"><button type="button" class="btn ghost" data-close>Close</button></div>`;
+    box.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => { stopPolling(); closeModal(); }));
+    box.querySelectorAll('.cloud-provider').forEach((card) => {
+      const key = card.dataset.provider;
+      const p = st.providers[key];
+      const setup = card.querySelector('.cloud-setup');
+      card.querySelector('[data-act="setup"]').addEventListener('click', () => { setup.hidden = !setup.hidden; if (!setup.hidden) setup.elements.client_id.focus(); });
+      card.querySelector('[data-act="setup-cancel"]').addEventListener('click', () => { setup.hidden = true; });
+      setup.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const err = setup.querySelector('.form-error');
+        err.hidden = true;
+        try {
+          await api.put('/api/cloud/credentials', { provider: key, client_id: setup.elements.client_id.value.trim(), client_secret: setup.elements.client_secret ? setup.elements.client_secret.value.trim() || null : null });
+          toast(setup.elements.client_id.value.trim() ? `${p.label} set up` : `${p.label} setup removed`);
+          render(false);
+        } catch (e2) { err.textContent = e2.message; err.hidden = false; }
+      });
+      card.querySelector('[data-act="connect"]')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        try {
+          const r = await api.post('/api/cloud/connect', { provider: key });
+          const win = window.open(r.auth_url, '_blank');
+          btn.textContent = 'Waiting for the sign-in in your browser…';
+          if (!win) toast('Your browser blocked the sign-in window; allow pop-ups for this app and try again', 'warn');
+          stopPolling();
+          const started = Date.now();
+          polling = setInterval(async () => {
+            if (!document.body.contains(box)) { stopPolling(); return; } // the dialog was closed
+            if (Date.now() - started > 300000) { stopPolling(); render(false); return; }
+            try {
+              const now = await api.get('/api/cloud/status');
+              if (now.providers[key].connected) { stopPolling(); toast(`${p.label} connected`); render(true); }
+            } catch { /* keep waiting */ }
+          }, 2000);
+        } catch (e2) { toast(e2.message, 'error'); btn.disabled = false; }
+      });
+      card.querySelector('[data-act="backup"]')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = 'Backing up…';
+        try { const r = await api.post('/api/cloud/backup', { provider: key }); toast(`Backed up to ${p.label} (${fmtBytes(r.size)})`); } catch (e2) { toast(`Backup failed: ${e2.message}`, 'error'); }
+        render(true);
+      });
+      card.querySelector('[data-act="restore"]')?.addEventListener('click', () => restoreFrom(key, p.label));
+      card.querySelector('[data-act="disconnect"]')?.addEventListener('click', async () => {
+        const ok = await confirmDialog(`Disconnect ${esc(p.label)}?`, 'Backups to it stop; the copy already there is left as it is.');
+        if (!ok) return;
+        try { await api.del(`/api/cloud/${key}`); toast(`${p.label} disconnected`); render(false); } catch (e2) { toast(e2.message, 'error'); }
+      });
+    });
+  }
+  render(true);
+}
+
+/** Choose the folder the vault file lives in, from the next start on: a cloud-synced folder shares it with the phone. */
+function openDataDirModal() {
+  const current = authInfo.configured_data_dir || '';
+  const modal = openModal('Data folder', `
+  <form id="txn-form" class="form" novalidate>
+    <p class="muted small">The vault file <code>portfolio.enc</code> is kept in this folder. Choose a folder that OneDrive, Google Drive or Dropbox syncs to use the same data on another device, and keep only one device open at a time: the app locks itself rather than overwrite a file another device changed.</p>
+    <label class="field">Folder
+      <input name="path" value="${esc(current)}" placeholder="${esc(authInfo.data_dir || '')}" maxlength="1000">
+      <span class="hint">The full path. Leave it empty to go back to the default folder, ${esc(authInfo.data_dir || '')}.</span>
+    </label>
+    <label class="check"><input type="checkbox" name="copy_vault" checked> Copy the current vault file there if that folder has none</label>
+    <div class="form-error" id="txn-form-error" hidden></div>
+    <div class="form-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>`);
+  const form = modal.querySelector('#txn-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = modal.querySelector('#txn-form-error');
+    err.hidden = true;
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      const res = await api.put('/api/settings/data-dir', { path: form.elements.path.value.trim() || null, copy_vault: form.elements.copy_vault.checked });
+      closeModal();
+      const where = res.data_dir || 'the default folder';
+      await confirmDialog('Data folder saved', `From the next start the app will keep its vault in <b>${esc(where)}</b>${res.copied ? ', where the current vault file has now been copied' : res.vault_exists_there ? ', which already holds a vault file' : ''}. Close the app and open it again to switch.`);
+      boot();
+    } catch (e2) {
+      err.textContent = e2.message;
+      err.hidden = false;
+      btn.disabled = false;
+    }
+  });
+  form.elements.path.focus();
 }
 
 function renderSetup() {
@@ -2040,9 +2536,13 @@ function renderSetup() {
         <div class="form-error" id="auth-error" hidden></div>
         <div class="form-actions"><button type="submit" class="btn primary">Set password and continue</button></div>
       </form>
+      ${dataFolderLine()}
     </section>`;
   const form = document.getElementById('setup-form');
   const err = document.getElementById('auth-error');
+  document.getElementById('btn-data-dir')?.addEventListener('click', openDataDirModal);
+  document.getElementById('btn-cloud-lock')?.addEventListener('click', openCloudModal);
+  cloudHint();
   form.elements.password.focus();
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -2160,6 +2660,7 @@ document.getElementById('btn-add-fund').addEventListener('click', () => openFund
 document.getElementById('btn-refresh').addEventListener('click', refreshNav);
 document.getElementById('btn-lock').addEventListener('click', lockNow);
 document.getElementById('btn-password').addEventListener('click', openPasswordModal);
+document.getElementById('btn-cloud').addEventListener('click', openCloudModal);
 let bootPending = false;
 window.addEventListener('vault-state', () => {
   // an API call hit a locked (423) or not-yet-set-up (409) vault, e.g. after the idle auto-lock

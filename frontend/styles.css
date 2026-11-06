@@ -304,6 +304,8 @@ h1 .badge { font-size: 0.8rem; margin-left: 8px; position: relative; top: -3px; 
 .chip.kind.stock { background: color-mix(in srgb, var(--series-1) 14%, transparent); color: var(--series-1); }
 .chip.kind.nps { background: color-mix(in srgb, var(--series-3) 16%, transparent); color: var(--series-3); }
 .chip.kind.epf { background: color-mix(in srgb, var(--series-4) 18%, transparent); color: var(--warn-ink); }
+.chip.kind.ppf { background: color-mix(in srgb, var(--series-5) 16%, transparent); color: color-mix(in srgb, var(--series-5) 60%, var(--text-primary)); }
+.chip.kind.gold { background: color-mix(in srgb, var(--series-6) 14%, transparent); color: color-mix(in srgb, var(--series-6) 75%, var(--text-primary)); }
 .scheme-nav { display: inline-flex; align-items: baseline; gap: 5px; margin-right: 12px; font-size: 1.1rem; }
 .scheme-nav .chip { font-size: 0.7rem; position: relative; top: -2px; }
 .sub-amount { color: var(--text-muted); font-size: 0.78rem; font-weight: 400; }
@@ -485,3 +487,12 @@ tr.status-err td.status { color: var(--bad); }
 .toast.show { opacity: 1; transform: none; }
 .toast.error { background: var(--bad); color: #fff; }
 .toast.warn { background: var(--warn-bg); color: var(--warn-ink); }
+
+/* the hidden attribute always wins, whatever display a class sets */
+[hidden] { display: none !important; }
+
+/* cloud backup dialog */
+.cloud-provider { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 10px; }
+.cloud-provider .head { display: flex; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; align-items: baseline; }
+.cloud-provider .cloud-setup { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.cloud-provider .banner.small { margin: 8px 0 0; }

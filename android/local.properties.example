@@ -1,0 +1,2 @@
+## Copy to local.properties and point sdk.dir at an Android SDK that has platforms;android-35 and build-tools;35.0.0.
+sdk.dir=C\:\\Program Files (x86)\\Android\\android-sdk

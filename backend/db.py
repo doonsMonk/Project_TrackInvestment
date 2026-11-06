@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import sqlite3
@@ -35,17 +36,42 @@ SCRYPT_MAXMEM = 128 * 1024 * 1024
 MIN_PASSWORD_LEN = 8
 
 
+def _settings_path() -> Path:
+    """settings.json next to the exe (packaged) or in the project folder (dev checkout)."""
+    base = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+    return base / "settings.json"
+
+
+SETTINGS_PATH = _settings_path()
+
+
+def read_settings() -> dict:
+    try:
+        data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_settings(settings: dict) -> None:
+    SETTINGS_PATH.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+
+
 def _resolve_data_dir() -> Path:
     """Where the vault file lives.
 
     1. INVESTMENT_TRACKER_DATA environment variable, if set.
-    2. Packaged exe: a `data` folder next to the exe (portable, easy to back up),
+    2. "data_dir" in settings.json (set from the app's Data folder dialog), e.g. a cloud-synced folder.
+    3. Packaged exe: a `data` folder next to the exe (portable, easy to back up),
        falling back to %LOCALAPPDATA%\\InvestmentTracker\\data if that isn't writable.
-    3. Dev checkout: <project>/data.
+    4. Dev checkout: <project>/data.
     """
     env = os.environ.get("INVESTMENT_TRACKER_DATA")
     if env:
         return Path(env)
+    configured = read_settings().get("data_dir")
+    if configured:
+        return Path(str(configured)).expanduser()
     if getattr(sys, "frozen", False):
         beside_exe = Path(sys.executable).resolve().parent / "data"
         try:
@@ -71,6 +97,7 @@ def _idle_lock_seconds() -> int:
 
 DATA_DIR = _resolve_data_dir()
 VAULT_PATH = DATA_DIR / "portfolio.enc"
+VAULT_WRITTEN_HOOKS: list = []  # called (no arguments) after the vault file is written; cloud backup listens here
 LEGACY_DB_PATH = DATA_DIR / "portfolio.db"  # unencrypted database from versions before the vault
 IDLE_LOCK_SECONDS = _idle_lock_seconds()
 
@@ -78,9 +105,9 @@ FUNDS_TABLE = """
 CREATE TABLE IF NOT EXISTS {name} (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     name          TEXT    NOT NULL,
-    kind          TEXT    NOT NULL DEFAULT 'MF' CHECK (kind IN ('MF', 'STOCK', 'NPS', 'EPF')),
+    kind          TEXT    NOT NULL DEFAULT 'MF' CHECK (kind IN ('MF', 'STOCK', 'NPS', 'EPF', 'PPF', 'GOLD')),
     scheme_code   INTEGER,                      -- AMFI scheme code (mutual funds; used by mfapi.in)
-    symbol        TEXT,                         -- ticker symbol (stocks; used by the quote source), e.g. ALL.AX
+    symbol        TEXT,                         -- ticker symbol (stocks; used by the quote source), e.g. BHP.AX
     exchange      TEXT,                         -- stocks: exchange name as reported by the quote source
     currency      TEXT    NOT NULL DEFAULT 'INR',  -- currency of amounts, NAVs / prices and units' value
     details       TEXT,                         -- kind-specific JSON (NPS: pension fund manager, tier, scheme ids)
@@ -161,6 +188,11 @@ class VaultNotSetUp(VaultError):
 
 class VaultLocked(VaultError):
     """The encrypted database exists but has not been unlocked in this session."""
+
+
+class VaultChangedOnDisk(VaultLocked):
+    """The vault file on disk was replaced (a sync client, or a file copied from another device) while this app
+    held it open; the app locked itself rather than overwrite it."""
 
 
 class WrongPassword(VaultError):
@@ -248,14 +280,21 @@ def _migrate(conn: sqlite3.Connection) -> bool:
     """Bring an older database up to the current schema. Returns True if anything changed."""
     changed = False
     fund_sql, fund_cols = _table_state(conn, "funds")
-    if fund_sql and ("details" not in fund_cols or "'EPF'" not in fund_sql):
-        # funds gained kind / symbol / exchange / currency (stocks), then details and the NPS kind. Foreign keys
-        # must be off while the old table is dropped, or ON DELETE CASCADE would wipe the transactions.
+    if fund_sql and ("details" not in fund_cols or "'GOLD'" not in fund_sql):
+        # funds gained kind / symbol / exchange / currency (stocks), then details and the NPS, EPF, PPF and GOLD kinds. Foreign keys
+        # must be off while the old table is dropped, or ON DELETE CASCADE would wipe the transactions. The pragma
+        # is ignored inside a transaction, so make sure none is open, and check the transaction count afterwards.
+        if conn.in_transaction:
+            conn.commit()
+        txn_count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] if _table_state(conn, "transactions")[0] else 0
         conn.execute("PRAGMA foreign_keys = OFF")
         try:
             _rebuild(conn, "funds", FUNDS_TABLE, FUND_COLUMNS, fund_cols)
             if conn.execute("PRAGMA foreign_key_check").fetchall():
                 raise VaultError("database upgrade failed: transactions reference missing funds")
+            kept = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] if txn_count else 0
+            if kept != txn_count:
+                raise VaultError(f"database upgrade failed: {txn_count - kept} transactions would be lost")
         finally:
             conn.execute("PRAGMA foreign_keys = ON")
         changed = True
@@ -295,6 +334,9 @@ class Vault:
         self._salt: bytes | None = None
         self._saved_changes = 0
         self._last_activity = 0.0
+        self._disk_stamp: tuple[int, int] | None = None  # (mtime_ns, size) of the file as this app last read / wrote it
+        self._disk_digest: str | None = None
+        self.last_notice: dict | None = None  # why the vault locked itself, for the lock screen
 
     # ---- state -----------------------------------------------------------
     def exists(self) -> bool:
@@ -354,6 +396,7 @@ class Vault:
                 conn.executescript(SCHEMA)
             self._conn, self._key, self._salt = conn, key, salt
             self._write_blob()
+            self.last_notice = None
             if migrated:
                 self._retire_legacy()
             self._saved_changes = conn.total_changes
@@ -372,6 +415,8 @@ class Vault:
             if self._conn is not None:
                 self._conn.close()
             self._conn, self._key, self._salt = conn, key, salt
+            self._remember_disk(blob)
+            self.last_notice = None
             if migrated:
                 self._write_blob()  # persist the upgraded schema right away
             self._saved_changes = conn.total_changes
@@ -388,7 +433,8 @@ class Vault:
         try:
             self.save_if_dirty()
         finally:
-            self._conn.close()
+            if self._conn is not None:  # save_if_dirty may already have given way to a changed file
+                self._conn.close()
             self._conn = None
             self._key = None
             self._salt = None
@@ -410,6 +456,9 @@ class Vault:
         try:
             if IDLE_LOCK_SECONDS and self._conn is not None and time.monotonic() - self._last_activity > IDLE_LOCK_SECONDS:
                 self._lock_held()
+            if self._conn is not None and self.changed_on_disk():
+                self._give_way()
+                raise VaultChangedOnDisk(self.last_notice["message"])
             self._require_unlocked()
             self._touch()
             return self._conn
@@ -425,8 +474,59 @@ class Vault:
 
     def save_if_dirty(self) -> None:
         if self._conn is not None and self._conn.total_changes != self._saved_changes:
+            if self.changed_on_disk():
+                self._give_way()  # never overwrite a file another device replaced
+                return
             self._write_blob()
             self._saved_changes = self._conn.total_changes
+
+    # ---- the file on disk ------------------------------------------------
+    def _stamp(self) -> tuple[int, int] | None:
+        try:
+            st = VAULT_PATH.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _remember_disk(self, blob: bytes) -> None:
+        self._disk_stamp = self._stamp()
+        self._disk_digest = hashlib.sha256(blob).hexdigest()
+
+    def changed_on_disk(self) -> bool:
+        """True when the vault file is no longer the one this app last read or wrote: a sync client or a copy
+        from another device replaced it. A rewrite with identical content (a sync client re-downloading) is
+        not a change."""
+        if self._disk_stamp is None or self._stamp() == self._disk_stamp:
+            return False
+        try:
+            digest = hashlib.sha256(VAULT_PATH.read_bytes()).hexdigest()
+        except OSError:
+            return True
+        if digest == self._disk_digest:
+            self._disk_stamp = self._stamp()
+            return False
+        return True
+
+    def _give_way(self) -> None:
+        """The file on disk changed under this app: keep its unsaved changes, if any, in a side file, forget the
+        key and leave a notice for the lock screen. Nothing on disk is overwritten. The caller holds the guard."""
+        aside = None
+        if self._conn.total_changes != self._saved_changes:
+            aside = VAULT_PATH.with_name(f"portfolio.conflict-{time.strftime('%Y%m%d-%H%M%S')}.enc")
+            try:
+                self._write_blob(aside)
+            except OSError:
+                aside = None
+        self._conn.close()
+        self._conn = self._key = self._salt = None
+        self.last_notice = {
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "message": "The vault file on disk was replaced by another copy (a cloud sync, or a file copied from another "
+                       "device) while this app had it open, so the app locked itself. Unlock to load the new copy."
+                       + (f" This app's unsaved changes were kept in {aside.name} next to it; nothing was overwritten."
+                          if aside else " Nothing was overwritten."),
+            "saved_aside": str(aside) if aside else None,
+        }
 
     # ---- internals -------------------------------------------------------
     def _require_unlocked(self) -> None:
@@ -436,14 +536,25 @@ class Vault:
     def _touch(self) -> None:
         self._last_activity = time.monotonic()
 
-    def _write_blob(self) -> None:
+    def _write_blob(self, path: Path | None = None) -> None:
+        """Encrypt the database and write it atomically to the vault file (or to `path`, for a side copy)."""
+        target = path or VAULT_PATH
+        if self._conn.in_transaction:
+            self._conn.commit()  # serialize() snapshots committed data only; a request's changes must not be left behind
         blob = _encrypt(self._key, self._salt, _normalize_header(self._conn.serialize()))
-        tmp = VAULT_PATH.with_name(VAULT_PATH.name + ".tmp")
+        tmp = target.with_name(target.name + ".tmp")
         with open(tmp, "wb") as fh:
             fh.write(blob)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, VAULT_PATH)
+        os.replace(tmp, target)
+        if path is None:
+            self._remember_disk(blob)
+            for hook in VAULT_WRITTEN_HOOKS:
+                try:
+                    hook()
+                except Exception:  # noqa: BLE001 - a backup problem must never fail a save
+                    pass
 
     def _retire_legacy(self) -> None:
         """Remove the unencrypted database, but only after proving the vault file decrypts."""

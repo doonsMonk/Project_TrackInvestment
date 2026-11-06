@@ -206,7 +206,7 @@ export function parseType(s, fallback = 'SIP') {
 // ------------------------------------------------------------------ multi-folio rows
 
 /**
- * "7999131051/79935563576" -> ['7999131051', '79935563576'] (a purchase spread over two folios).
+ * "1234567890/2345678901" -> ['1234567890', '2345678901'] (a purchase spread over two folios).
  * Returns null for a single folio, including forms like "1234567/89" or "PP/1001" where the part after
  * the separator is only a short suffix rather than a full folio number.
  */
@@ -432,6 +432,15 @@ export function buildRows(rows, map, { defaultType = 'SIP', defaultFolio = '', e
     const out = { index, folio: get('folio') || defaultFolio, name: get('name'), scheme: '', type: parseType(get('type'), defaultType), notes: String(get('notes')).trim(), date: null, amount: null, units: null, nav: null, status: 'ok', message: '' };
 
     const fail = (msg) => { out.status = 'error'; out.message = msg; return [out]; };
+    // A sheet's summary line ("Current Value | 6-Nov-2026 | 169980 | 20 | 8,499") is not a transaction; it carries
+    // the price on that date, which a gold bond's import can record as the gold price.
+    if (['name', 'type', 'folio'].some((f) => /^\s*(current|market|total)\s*value\s*$/i.test(String(get(f))))) {
+      out.status = 'price';
+      out.message = 'Summary line';
+      out.date = ci.date >= 0 ? parseDate(get('date')) : null;
+      out.nav = ci.nav >= 0 ? parseNumber(get('nav')) : null;
+      return [out];
+    }
     if (ci.date < 0) return fail('No date column mapped');
     if (ci.amount < 0 && !npsCols.length) return fail('No amount column mapped');
 
@@ -527,4 +536,122 @@ export function buildRows(rows, map, { defaultType = 'SIP', defaultFolio = '', e
       return markDuplicate(part, existing);
     });
   });
+}
+
+// ------------------------------------------------------------------ PPF financial-year tables
+
+const PPF_HINTS = [
+  ['rate', /rate|\bir\b|%/i],
+  ['interest', /interest/i],
+  ['deposit', /deposit|contrib|amount|paid/i],
+  ['timing', /5th|before|after|timing|when/i],
+  ['balance', /balance/i],
+];
+
+/**
+ * Read one financial year's PPF sheet: an optional "Balance" line (the opening balance and the starting year,
+ * e.g. 2021), a header line starting with "Month", one line per month with the deposit, whether it was made
+ * before or after the 5th, the interest rate, the month's interest and the running balance, and a totals line.
+ * Returns { fyStart, opening, months, totals, warnings }; `months` are in April..March order.
+ */
+export function parsePpfYear(text) {
+  const { rows } = splitRows(text);
+  const warnings = [];
+  const first = (r) => r.find((c) => c !== '') || '';
+  const year4 = (c) => (/^(19|20)\d{2}$/.test(String(c).trim()) ? Number(String(c).trim()) : null);
+  const headerRow = rows.find((r) => /^month$/i.test(first(r)));
+  let map = { month: 0, deposit: 1, timing: 2, rate: 3, interest: 4, balance: 5 }; // the sheet's column order
+  if (headerRow) {
+    const found = {};
+    headerRow.forEach((h, i) => {
+      if (/^month$/i.test(h)) { found.month = i; return; }
+      for (const [field, re] of PPF_HINTS) if (found[field] === undefined && re.test(h)) { found[field] = i; break; }
+    });
+    if (found.deposit !== undefined) map = { ...map, ...found };
+    else warnings.push('Could not recognise the Deposit column from the header; using the standard column order.');
+  }
+  let fyStart = null;
+  let opening = null;
+  const balanceRow = rows.find((r) => /^(opening\s+)?balance$/i.test(first(r)));
+  if (balanceRow) {
+    const years = balanceRow.map((c) => year4(c) ?? parseFinancialYear(c));
+    const yearIdx = years.length - 1 - [...years].reverse().findIndex((y) => y !== null); // the last year-like cell
+    if (years.some((y) => y !== null)) fyStart = years[yearIdx];
+    const nums = balanceRow.map((c, i) => (i === 0 || i === yearIdx ? null : parseNumber(c))).filter((n) => n !== null);
+    if (nums.length && nums[0] > 0) opening = { balance: nums[0] };
+  }
+  if (fyStart === null) {
+    for (const r of rows) for (const c of r) { const y = year4(c) ?? parseFinancialYear(c); if (y !== null) { fyStart = y; break; } }
+  }
+  const months = [];
+  let totals = null;
+  for (const r of rows) {
+    if (r === balanceRow || r === headerRow) continue;
+    const name = String(r[map.month] || '').trim().toLowerCase().slice(0, 9).replace(/[^a-z]/g, '');
+    const idx = EPF_MONTHS.indexOf(name);
+    if (idx < 0) {
+      // the totals line: no month name, numbers in the deposit / interest / balance columns (a plain tab-separated
+      // paste loses the empty month cell to trimming, which shifts the line one column left)
+      const shift = parseNumber(r[map.month]) !== null ? 1 : 0;
+      const cell = (field) => r[map[field] - shift];
+      if (!name && totals === null && parseNumber(cell('deposit')) !== null) {
+        totals = { deposit: parseNumber(cell('deposit')) ?? 0, interest: parseNumber(cell('interest')) ?? 0, balance: parseNumber(cell('balance')) ?? 0 };
+      }
+      continue;
+    }
+    const timingRaw = String(r[map.timing] ?? '');
+    months.push({
+      index: idx,
+      month: EPF_MONTHS[idx][0].toUpperCase() + EPF_MONTHS[idx].slice(1),
+      deposit: parseNumber(r[map.deposit]) ?? 0,
+      timing: /before|\bby\b|on or/i.test(timingRaw) ? 'before' : /after/i.test(timingRaw) ? 'after' : null,
+      rate: map.rate === undefined ? null : parseNumber(r[map.rate]),
+      interest: parseNumber(r[map.interest]) ?? 0,
+    });
+  }
+  months.sort((a, b) => a.index - b.index);
+  const seen = new Set();
+  for (const m of months) { if (seen.has(m.index)) warnings.push(`${m.month} appears more than once.`); seen.add(m.index); }
+  const interestSum = months.reduce((sum, m) => sum + (m.interest > 0 ? m.interest : 0), 0);
+  if (totals && totals.interest > 0 && Math.abs(totals.interest - interestSum) > 0.5) {
+    warnings.push(`The sheet's interest total (${totals.interest}) differs from the sum of the months (${Math.round(interestSum * 100) / 100}); the months are used.`);
+  }
+  return { fyStart, opening, months, totals, warnings };
+}
+
+/**
+ * Transactions for one PPF year from parsePpfYear's result: each deposit dated the 1st of its month when made
+ * before the 5th (so it earns that month's interest) and the 15th otherwise, the year's interest (the monthly
+ * figures added up) on 31 March, and optionally the opening balance brought forward, dated 1 April.
+ * existing: the account's current transactions, used to flag duplicates.
+ */
+export function buildPpfRows(parsed, { fyStart, existing = [], includeOpening = false, account = '' } = {}) {
+  const fy = fyStart ?? parsed.fyStart;
+  const out = [];
+  if (fy === null || fy === undefined) return out;
+  const label = fyLabel(fy);
+  const push = (row) => {
+    const dup = existing.find((t) => t.date === row.date && t.type === row.type
+      && Math.abs((row.type === 'BONUS' ? t.units : t.amount) - (row.type === 'BONUS' ? row.units : row.amount)) < 0.01);
+    out.push({ status: dup ? 'dup' : 'ok', folio: account, scheme: '', notes: '', ...row });
+  };
+  if (includeOpening && parsed.opening?.balance > 0) {
+    const amount = parsed.opening.balance;
+    push({ date: `${fy}-04-01`, type: 'LUMPSUM', amount, units: amount, nav: 1, rate: null, notes: `Opening balance brought forward into FY ${label}`, label: `Opening balance ₹${amount.toLocaleString('en-IN')}` });
+  }
+  let interest = 0;
+  let rate = null;
+  for (const m of parsed.months) {
+    const year = m.index < 9 ? fy : fy + 1;
+    const monthNum = ((m.index + 3) % 12) + 1;
+    if (m.rate !== null && m.rate > 0) rate = m.rate;
+    if (m.deposit > 0) {
+      const day = m.timing === 'before' ? '01' : '15';
+      push({ date: `${year}-${String(monthNum).padStart(2, '0')}-${day}`, type: 'SIP', amount: m.deposit, units: m.deposit, nav: 1, rate: m.rate, label: `${m.month} ${year}: ₹${m.deposit.toLocaleString('en-IN')}${m.timing ? ` (${m.timing} the 5th)` : ''}` });
+    }
+    interest += m.interest > 0 ? m.interest : 0;
+  }
+  interest = Math.round(interest * 100) / 100;
+  if (interest > 0) push({ date: `${fy + 1}-03-31`, type: 'BONUS', amount: 0, units: interest, nav: 1, rate, notes: `Interest for FY ${label}`, label: `Interest for FY ${label}: ₹${interest.toLocaleString('en-IN')}` });
+  return out;
 }

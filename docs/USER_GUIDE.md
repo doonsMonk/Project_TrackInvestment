@@ -18,7 +18,7 @@ This guide covers every feature in the app. The last section lists what was adde
 |---|---|
 | **Holding** | One thing you own: a mutual fund or a stock. The portfolio page lists all holdings together. |
 | **Fund** | One mutual fund scheme you invest in, for example "Parag Parikh Flexi Cap Fund – Direct Plan – Growth". Each fund is linked to an official AMFI scheme code, which is how the app fetches its NAV. |
-| **Stock** | Shares of a listed company or an ETF, on any exchange: NSE, BSE, ASX, NASDAQ, NYSE, LSE and so on. Each stock is linked to a ticker **symbol** such as `RELIANCE.NS`, `ALL.AX` or `AAPL`, which is how the app fetches its price. |
+| **Stock** | Shares of a listed company or an ETF, on any exchange: NSE, BSE, ASX, NASDAQ, NYSE, LSE and so on. Each stock is linked to a ticker **symbol** such as `RELIANCE.NS`, `BHP.AX` or `AAPL`, which is how the app fetches its price. |
 | **Currency** | The money a stock is traded in (AUD for an ASX share, USD for a US share). The app keeps each stock in its own currency and converts to **INR** for the portfolio totals. Mutual funds are always INR. |
 | **Folio / Account** | For a fund: the folio number the fund house gave you. For a stock: the broker or demat account (optional). One holding can have several; each transaction records which one it belongs to. |
 | **Transaction** | A purchase (**SIP** installment, **Lumpsum**, or **Buy** for a stock), a sale (**Redemption** / **Sell**), a **Dividend** received, or **Bonus** (free) units or shares. It has a date, amount, NAV / price, units and an optional comment. |
@@ -33,6 +33,8 @@ This guide covers every feature in the app. The last section lists what was adde
 | **NPS account** | Your National Pension System account (Tier I or II) with one pension fund manager. It holds several **schemes** at once: **E** (equity), **C** (corporate bonds), **G** (government securities) and sometimes **A** (alternative assets), each with its own NAV and units. |
 | **Switch** | Units moved from one NPS scheme to another when the account is rebalanced. No money reaches you, so switches are not contributions or withdrawals; within a scheme they are money leaving or entering that scheme. |
 | **Charges** | Units deducted from a holding to pay fees (NPS maintenance charges, for example). Their value is lost, so it counts against your gain. |
+| **Gold bond** | A Sovereign Gold Bond (SGB) series you hold: so many grams of gold, bought at the issue price, earning 2.5 % a year on that price paid every six months, redeemed at the gold price after eight years (or from the fifth year). It is valued at the series' NSE traded price, fetched from NSE by its code; a bond without a code is valued at a **gold price per gram** you enter. |
+| **PPF account** | Your Public Provident Fund account. Deposits whenever you like, interest credited once a year on 31 March at the declared rate, and maturity 15 financial years after the year of opening. As with EPF, nothing is looked up online: you enter deposits and the interest credited, and the app keeps the balance. |
 | **EPF account** | Your Employees' Provident Fund account (one per UAN). It has two **shares** that earn interest, the **employee share** and the **employer share**, and the employer's **pension (EPS) contribution**, which goes to the pension scheme and is tracked separately. Nothing is looked up online: you enter deposits and the interest EPFO credits each year, and the app keeps the balances. |
 
 ---
@@ -140,8 +142,9 @@ holdings) and what is under lock-in (locked holdings), with the amounts and what
 stock), its category or its symbol, exchange and currency, the folio or account, status badge, invested,
 current value, P&L (rupees and percent, with the realised figure), XIRR, and the latest NAV or
 price with its date. As soon as you hold more than one kind, the rows are **grouped by asset class**
-(Mutual funds, Stocks, NPS, EPF), each group under its own heading and with a subtotal row of invested
-amount, current value and P&L. Click a group heading to **collapse** the group down to its subtotal row and
+(Mutual funds, Stocks, NPS, EPF, PPF, Gold), each group under its own heading and with a subtotal row of invested
+amount, current value, P&L and the group's XIRR (the annualised return of those holdings taken together, so a
+collapsed group still tells you how that asset class is doing). Click a group heading to **collapse** the group down to its subtotal row and
 click it again to expand it; the app remembers which groups you collapsed, separately for the Active and
 Closed tabs. For a stock in another currency the invested and current value cells show the
 rupee figure with the original currency underneath, and XIRR shows the rupee return with the
@@ -164,9 +167,9 @@ has no exchange rate yet, a banner names it and it is left out of the rupee tota
 
 ---
 
-## 4. Adding a mutual fund, a stock, an NPS account or an EPF account
+## 4. Adding a mutual fund, a stock, an NPS, EPF or PPF account, or a gold bond
 
-Click **+ Add fund / stock**. At the top of the dialog choose **Mutual fund**, **Stock / ETF**, **NPS** or **EPF**.
+Click **+ Add fund / stock**. At the top of the dialog choose **Mutual fund**, **Stock / ETF**, **NPS**, **EPF**, **PPF** or **Gold (SGB)**.
 
 ### Mutual fund
 
@@ -180,7 +183,7 @@ Click **+ Add fund / stock**. At the top of the dialog choose **Mutual fund**, *
 
 ### Stock / ETF
 
-1. **Search stock or ETF** – type the company name or ticker, for example `reliance`, `acme` or
+1. **Search stock or ETF** – type the company name or ticker, for example `reliance`, `infosys` or
    `AAPL`. Results come from Yahoo Finance and cover every major exchange; each shows the symbol, the
    company name and the exchange. Indian shares appear twice, as the NSE listing (`RELIANCE.NS`) and the
    BSE listing (`RELIANCE.BO`); pick the one you trade on. Selecting a result fills in the **Symbol** and
@@ -214,6 +217,35 @@ The app downloads the full NAV history of every ticked scheme. Changing the sche
 An EPF account is marked **Locked** because the money is not available until the EPFO withdrawal rules
 allow it. Nothing is fetched online for EPF; the next section explains how you enter deposits and interest.
 
+### PPF account
+
+1. **Bank / post office** (optional) and **Account opened on**. The opening date sets the maturity: 15
+   financial years after the year of opening, so an account opened in FY 2015-16 matures on 1 April 2031.
+   The app fills **Locked until** with that date; leave the date empty to take the first deposit's date
+   instead.
+2. **Account number** – your PPF account number, used as the account's folio.
+
+A PPF account is marked **Locked** until maturity. Nothing is fetched online for PPF; the next section
+explains how you enter deposits and interest, and section 15 the PPF rules the app follows.
+
+### Gold bond (Sovereign Gold Bond)
+
+1. **Pick the series from the exchange list** – every Sovereign Gold Bond series, live ones first, with
+   its NSE code, issue date, issue price and latest traded price. The prices come from NSE's own feed and the
+   issue details from sgb.vercel.app (Yahoo Finance, which prices your stocks, does not know the bonds).
+   Picking a series fills in everything below.
+2. **Series** – the name, for example `Sovereign Gold Bonds 2021-22-Series-X`; it becomes the display name.
+3. **NSE code** – such as `SGBMAR30X`. With a code the bond is priced from the exchange list and refreshed
+   with the other prices. Leave it empty to value the bond at a gold price you enter yourself.
+4. **Issue price per gram** – the price interest is paid on, before any online discount (₹5,109 when you
+   paid ₹5,059). With it the app shows the amount of each half-yearly interest payment.
+5. **Issue date** – it sets the interest dates, the early-redemption date (five years on, filled into
+   **Locked until**) and the maturity (eight years on). The exchange list gives it to the month; the exact
+   date is in the RBI press release or your allotment advice. Leave it empty to take the first purchase's date.
+6. **Default folio** (optional) – the folio or demat account on your allotment.
+
+Section 16 explains how a gold bond is valued and what the bond page shows.
+
 ### Both
 
 3. **Display name** – how the holding appears in the app. Shorten it if you like.
@@ -228,7 +260,7 @@ If you picked the wrong scheme or symbol, don't delete the holding: see section 
 
 ---
 
-## 5. The Fund / Stock / NPS / EPF page
+## 5. The Fund / Stock / NPS / EPF / PPF / Gold bond page
 
 Open a holding from the portfolio table. The page shows:
 
@@ -286,6 +318,27 @@ buttons are **Import a year**, **Year interest**, **+ Add month** and **+ Add en
 **Moved jobs** for a change of employer (section 14). A yellow banner reminds you when the latest year's
 interest has not been entered yet.
 
+**PPF accounts** have no shares. The tiles are **Deposits** (with this financial year's deposits and any
+withdrawals), **Interest credited** (the last year credited and its rate, or the year still pending),
+**XIRR** and **Matures on** (15 financial years after the year of opening, with the time left; once matured,
+the tile shows the end of the current five-year extension instead). The **By financial year** table lists
+deposits, the interest rate, the interest credited, withdrawals and the closing balance for each year;
+**Deposits and interest by year** stacks deposits (blue) and interest (green) per year; and **Balance over
+time** follows. The entries table has one row per entry: the date, the type, the amount, the interest rate and
+a comment. The buttons are **Import a year**, **Year interest** and **+ Add entry** (section 6).
+
+**Gold bonds** look like a stock page with grams instead of shares and a **Price per gram** instead of a
+share price: the tiles are **Total investment**, **Unrealised profit** (with the interest received so far as
+the realised part), **XIRR** and **Latest price per gram** with its date and where it came from (the NSE
+traded price, or a price you entered). A **Gold price** button sits in the header for bonds without an NSE
+code: enter today's price per gram and the date, and every such bond is revalued; the dialog also lists the
+prices you entered before, so a stale one can be removed. A banner reminds you when a bond has no price yet.
+The **Bond details** card lists the series, the code (as a Google Finance link), the issue date and price, the
+interest terms with the amount of each payment and the next due date, the interest received so far, the
+early-redemption date, the maturity with the time left, the price with its source, and the **IBJA gold
+price** (the rate RBI redeems at) with how far the market price sits from it. Transactions are purchases
+(grams at a price per gram), **Interest** receipts and redemptions or sales.
+
 **By folio / By account** – shown when there is more than one. One row per folio with its transaction
 count, invested amount, units, current value, P&L and XIRR, plus a totals row. Clicking a row applies the
 filter.
@@ -321,7 +374,7 @@ Click **+ Add transaction** on the holding's page, or **Edit** on a row.
     received. The amount box is switched off: nothing was paid, and the shares are added at zero cost.
 - **Folio number / Account** – pre-filled with the holding's default (or the folio you are currently
   filtering on). Change it if this transaction belongs to a different one. If one purchase was spread
-  over several folios, type them all separated by `/` (for example `7999131051/79935563576`); the
+  over several folios, type them all separated by `/` (for example `1234567890/2345678901`); the
   form detects this and offers to create one transaction per folio with the amount and units divided
   equally, each carrying a comment that records the split.
 - **Amount** – in the holding's currency (shown in the label): what you paid, or received.
@@ -336,9 +389,9 @@ Click **+ Add transaction** on the holding's page, or **Edit** on a row.
 
 Click **Add transaction** (or **Save changes**). All figures and charts update immediately.
 
-### EPF entries
+### EPF and PPF entries
 
-EPF has its own forms, because one month means several entries:
+EPF has its own forms, because one month means several entries; PPF uses the same forms with a single amount:
 
 - **+ Add month** – one dialog for the whole month: the date (the 15th is pre-filled), the type, the
   employee deposit, the employer deposit (the EPF part only), the pension (EPS) contribution and the interest
@@ -350,6 +403,9 @@ EPF has its own forms, because one month means several entries:
   (for example a balance that was already in the account before you started using the app), interest
   credited, or a withdrawal (advance), again with employee, employer and pension boxes. **Edit** on a row of
   the table opens this dialog with the month filled in; clearing an amount removes that share's entry.
+- **PPF** – **+ Add entry** opens the same dialog with one amount box: a deposit (dated the day you paid;
+  deposits made by the 5th earn that month's interest), a transfer in or opening balance, interest credited,
+  or a withdrawal. **Year interest** records the interest credited for a financial year, dated 31 March.
 
 ### Exiting a holding
 
@@ -410,7 +466,7 @@ commas, semicolons and `|` are all accepted as separators.
   **rebalance**: a switch out of the first scheme and into the second. Money coming in with units going down
   everywhere is a **withdrawal**. Paste the statement on the NPS account's page.
 - **EPF sheets** are imported one financial year at a time with **Import a year** on the EPF page. Paste the
-  year as it is in your sheet: the `Balance` line on top (deposits to date, the year such as `2011-2012`, and
+  year as it is in your sheet: the `Balance` line on top (deposits to date, the year such as `2021-2022`, and
   the balances brought forward), the `Month` header line, one line per month with the employee deposit,
   employer deposit, pension contribution, `IR%`, interest on each share and the running balances, and the
   `Year Total` / `Overall Total` lines. The totals and the balance columns are ignored (the app works the
@@ -418,12 +474,27 @@ commas, semicolons and `|` are all accepted as separators.
   each month and the year's interest 31 March. If the Balance line brings in balances from years that are not
   in the app yet, a tick box offers to record them as of 1 April (deposits as a transfer in, the interest to
   date as interest). Months already recorded are skipped, so a year can be pasted again after adding months.
+- **PPF sheets** are imported one financial year at a time with **Import a year** on the PPF page. Paste the
+  year as it is in your sheet: the `Balance` line on top (the opening balance and the starting year, such as
+  `2021`), the `Month` header line, one line per month with the deposit, `Before 5th` or `After 5th`, the
+  interest rate, the month's interest and the running balance, and the totals line. A deposit marked Before
+  5th is dated the 1st of its month and one marked After 5th the 15th; the monthly interest figures are added
+  up into one interest entry dated 31 March; the balance column and the totals are ignored (the app works the
+  balance out itself, and warns if the sheet's interest total does not match the months). If the Balance line
+  brings in a balance from years that are not in the app yet, a tick box offers to record it as a transfer in
+  dated 1 April. Deposits already recorded are skipped.
+- **Gold bond sheets** use the mutual fund layout (folio, name, type, date, amount, grams, price per gram),
+  with `LUMP SUM` purchases as negative amounts and the half-yearly interest as `dividend` rows (positive
+  amount, 0 grams), which import as **Interest**. A closing `Current Value` line (its date, value, grams and
+  price per gram) is not a transaction: the preview marks it as a summary line, and for a bond priced by
+  hand a tick box offers to record its price per gram as the **gold price** for that date. For a bond priced
+  from the exchange, and for any other kind of holding, such a line is simply skipped.
 - If a purchase or sale row has units but no price, or a price but no units, the missing one is
   calculated. If it has neither, the price for that date is looked up from history.
 - A comment column is imported as the transaction's comment. **Comment for imported rows** applies one
   comment to every row that has none, for example "Imported from CAS statement, Nov 2026".
 - **Purchases spread over several folios.** Statements sometimes show one SIP against two folios, such as
-  `7999131051/79935563576` with ₹5,000 and 47.948 units. With **Split rows that list several folios**
+  `1234567890/2345678901` with ₹5,000 and 47.948 units. With **Split rows that list several folios**
   ticked (the default), such a row becomes one transaction per folio, each with half the amount and half
   the units at the same NAV, and a comment noting the split. Folios like `1234567/89`, where the part
   after the slash is only a short suffix, are treated as a single folio. Untick the option to keep such
@@ -508,6 +579,15 @@ Every transaction can carry a short note.
   so you know the figures may be a day or two old. If a source keeps failing, the banner repeats the
   reason and the app waits ten minutes before trying that source again.
 
+**Gold bonds** take the day's traded price of each series from NSE's own feed (the data behind NSE's
+sovereign gold bond market page), and the rest from sgb.vercel.app: a short daily price history, the face
+value and issue date, the interest dates and the IBJA gold price RBI redeems at. If NSE cannot be reached the
+page's price is used, and the Bond details card says so. One fetch each covers every series, refreshed like
+the other sources and forced by *Refresh prices*; the app keeps working on the last fetched prices when both
+are unreachable. Yahoo Finance does not carry the bond series. A bond without an NSE code is valued instead at
+the gold price per gram you enter with **Gold price** on its page (or by importing a sheet that ends with a
+Current Value line); one entered price, with its date, serves every such bond.
+
 ---
 
 ## 11. How the numbers are calculated
@@ -537,6 +617,12 @@ Every transaction can carry a short note.
   out and today's balance as money back. The **return on your own contributions** does the same with the
   employee deposits only, so the employer's share counts as part of the gain. Pension (EPS) contributions are
   outside all of this. No interest is ever calculated by the app.
+- **PPF balance** = deposits + interest credited − withdrawals, exactly like one EPF share; the XIRR treats
+  every deposit as money out and today's balance as money back. Interest is entered, never calculated.
+- **Gold bond value** = grams held × the gold price per gram you entered (the latest entry; the chart uses
+  each entry from its date on). Interest payments are treated exactly like dividends: realised, part of the
+  XIRR, and shown as "interest" rather than "dividends". A redemption or sale is a sale of grams at that
+  day's price, with the FIFO gain as for any holding.
 - **Dividends** = cash received as dividends or IDCW payouts. They are **realised**: the money is already
   in your bank account, so they are shown together with the gains from sales as the realised figure, and
   never inside the unrealised profit. They do not reduce the cost of your holding (that figure is what
@@ -636,7 +722,50 @@ the employee and employer balances at the rate declared for that year. The app m
 
 ---
 
-## 15. Your data: where it is, backups and safety
+## 15. PPF accounts: deposits, interest and maturity
+
+A Public Provident Fund account takes deposits whenever you like (at least ₹500 and at most ₹1.5 lakh in a
+financial year), earns interest at the rate the government declares each quarter, and credits that interest
+once a year on 31 March. A month's interest is paid on the lowest balance between the 5th and the end of the
+month, which is why a deposit made by the 5th matters. The app records all of this as data:
+
+- **Deposits** are dated the day you paid. When a year is imported, a deposit marked *Before 5th* is dated
+  the 1st of the month and one marked *After 5th* the 15th.
+- **Interest is entered, not calculated.** Import a year to add the monthly interest figures from your sheet
+  up into one entry dated 31 March, or enter the year's interest with **Year interest** once the bank or post
+  office credits it. Until then the balance shows deposits only for that year and a banner says so.
+- **Maturity.** A PPF account matures 15 financial years after the year it was opened (opened in FY 2015-16,
+  matures on 1 April 2031). The account page shows the date and the time left, and **Locked until** is filled
+  with it when you set the opening date. After maturity the account is shown as extended in five-year blocks.
+- **Withdrawals** (a partial withdrawal from the seventh year, or the balance at maturity) are entries of type
+  Withdrawal. Withdrawing everything closes the account.
+
+---
+
+## 16. Sovereign Gold Bonds: gold price, interest and maturity
+
+A Sovereign Gold Bond is a government bond denominated in grams of gold. You buy it at the issue price per
+gram (online buyers get a ₹50 discount), RBI pays 2.5 % a year on the issue price in two half-yearly
+instalments, and at maturity after eight years the bond is redeemed at the then gold price (the IBJA 999
+rate), free of capital gains tax. RBI also buys it back from the fifth year on an interest date, and a bond
+held in demat form can be sold on the exchange at any time. The app records this as:
+
+- **Grams and a price per gram.** A purchase is so many grams at the price you paid; the holding is worth
+  grams × its price per gram. With an NSE code that is the series' last traded price from NSE's feed,
+  fetched with the other prices (sgb.vercel.app adds the history and the IBJA gold price, shown for
+  comparison because RBI redeems at it). Without a code it is the **gold price per gram** you enter with **Gold price** (one price for
+  all such bonds, dated, with the earlier entries kept for the chart).
+- **Interest** is a transaction of type Interest (money received, no change in grams), like a dividend. The
+  **Bond details** card shows the amount of each payment when the issue price is known, the next due date,
+  and how many payments are left.
+- **Dates.** From the issue date the app works out the half-yearly interest dates, the early-redemption date
+  (five years on, which is also put into **Locked until**) and the maturity (eight years on, with the time
+  left). Without an issue date the first purchase's date is used; set the real one with Edit gold bond.
+- **Redemption or sale** is a sale of grams at that day's price; selling everything closes the bond.
+
+---
+
+## 17. Your data: where it is, backups and safety
 
 - Everything is stored in a single file named **`portfolio.enc`**, inside the `data` folder next to the
   exe (or inside the project's `data` folder when running from source). If the folder next to the exe is
@@ -650,9 +779,69 @@ the employee and employer balances at the rate declared for that year. The app m
 - **Forgotten password:** there is no reset. The only way forward is to delete `portfolio.enc` and start
   again from your statements. Consider keeping the password in a password manager.
 
+### Cloud backup to Google Drive, OneDrive or Dropbox
+
+Click **Cloud** in the top bar (or **Cloud backup…** under the lock screen). The dialog lists the three
+providers. Each needs a one-time **Set up…** where you paste an OAuth client ID that you create in the provider's
+own console under your personal account; the dialog explains the exact steps for each and links to the console
+(for Google also a client secret; for Dropbox the return address `http://127.0.0.1:8000/api/cloud/callback` must be
+registered on the app you create). Then click **Connect**: the provider's normal sign-in page opens in your
+browser, you allow the app access to its own folder, and the browser hands you back to the app. From then on,
+every change is uploaded a few seconds later, and the dialog shows the account, the last backup and what the
+cloud holds. The file is encrypted before it leaves the device, so the cloud only ever holds ciphertext, and the
+app can see only the folder it created (`Investment Tracker` in Google Drive, `Apps/<your app name>` in OneDrive
+and Dropbox), never your other files.
+
+To use the same data on another device, connect the same provider there and click **Restore from …**: the
+device's vault file is replaced by the cloud copy (the previous file is kept beside it as
+`portfolio.before-restore-<date>.enc`) and you unlock with that file's password. When a device's lock screen
+finds that another device saved a newer copy, it says so and offers the restore right there. Several providers
+can be connected at once; **Back up now** uploads immediately; **Disconnect** stops the backups and leaves the
+copy in the cloud as it is. The client IDs stay in `settings.json`, the sign-in tokens in `cloud_tokens.json` in
+the data folder; delete that file or disconnect to revoke this device.
+
+### Keeping the vault in a cloud folder, and using it on another device
+
+The vault is one file, `portfolio.enc`, encrypted with your password before it is written, so a folder that
+OneDrive, Google Drive or Dropbox syncs only ever holds ciphertext. To move it there, click **Change folder…**
+under the lock screen (or the first-run screen), give the folder's full path, and leave **Copy the current vault
+file there** ticked; the choice is kept in `settings.json` next to the exe and takes effect when you open the app
+again. Leave the folder empty to go back to the default. The folder can also be set with the
+`INVESTMENT_TRACKER_DATA` environment variable, which wins over the setting.
+
+Keep only one device open at a time. The app keeps the whole database in memory while unlocked and writes the
+file after every change, so if the file on disk is replaced underneath it (a sync client bringing another
+device's copy, or a file you copied in by hand) it does not overwrite that copy: it locks itself, the lock screen
+explains why, and unlocking loads the new copy. If this app had changes of its own that were not yet in the file,
+they are kept in a side file named `portfolio.conflict-<date>.enc` in the same folder, which opens with the same
+password: the app never silently loses either side. A sync client re-downloading an identical file is not
+treated as a change.
+
 ---
 
-## 16. Tips and shortcuts
+## 18. The Android app
+
+The same app runs on an Android phone: the backend runs inside the app, the pages are the ones you know, and the
+data is the same encrypted file, `portfolio.enc`, kept in the app's private storage. It is installed from the
+APK file built from this project (`android\app\build\outputs\apk\debug\app-debug.apk`): copy it to the phone and
+open it, allowing the file manager to install unknown apps when asked. The first start unpacks the app and takes
+a few seconds; after that it opens like any other app and asks for the vault password.
+
+- **The same data on the phone and the PC.** Long-press anywhere on a page to open the menu. **Save vault as…**
+  writes the phone's vault file to a place you pick: Google Drive, OneDrive, Dropbox and the Downloads folder all
+  appear in the picker. **Open vault file…** replaces the phone's vault with a file you pick (it asks first, and
+  the app locks so the file's own password is needed). On the PC, the vault is in the data folder (section 17),
+  which can itself be a cloud-synced folder. Copy the file in one direction at a time, and keep only one device
+  open while you make changes: both apps refuse to overwrite a file that another device changed.
+- **Prices** are fetched by the phone the same way: mutual funds, stocks, NPS and gold bonds refresh when
+  older than six hours or with Refresh prices; EPF and PPF need no prices.
+- **Links** such as the Google Finance quote open in the phone's browser.
+- **Reload** in the menu reloads the page; **About** shows the version, which matches the PC build it came from.
+- The phone keeps your theme, the collapsed groups and the active tab, just like the PC.
+
+---
+
+## 19. Tips and shortcuts
 
 - **Enter** on a highlighted holding or folio row opens it; **Escape** closes any dialog.
 - Bookmark a holding's page, or a folio view of it, in your browser; the address includes both.
@@ -663,7 +852,7 @@ the employee and employer balances at the rate declared for that year. The app m
 
 ---
 
-## 17. Troubleshooting
+## 20. Troubleshooting
 
 | Problem | What to do |
 |---|---|
@@ -679,6 +868,10 @@ the employee and employer balances at the rate declared for that year. The app m
 | "Could not fetch NAVs for SM0070xx" when adding an NPS account | NPS Trust could not be reached, or that scheme is not in its NAV file. Try again online; if a scheme is missing, untick it. |
 | An NPS row imports with the wrong types | Check the preview labels: 0 amount with units down everywhere is charges; units down in one scheme and up in another is a rebalance; money with units everywhere is a contribution. Fix the data (for example a missing minus sign) and paste again. |
 | An EPF year shows "pending" interest | EPFO's interest for that year has not been entered. Click *Year interest* on the account page once it is credited. |
+| A PPF year shows "pending" interest | The interest for that year has not been entered. Import the year's sheet, or click *Year interest* once the bank or post office credits it. |
+| A gold bond shows no current value | It has no price yet. With an NSE code, click *Refresh prices* while online and check the code under *Edit gold bond*; without one, click *Gold price* and enter today's price per gram. |
+| "SGBMAR30X is not in the Sovereign Gold Bond lists" when adding a bond | The code is not an NSE symbol either source knows. Pick the series from the list in the dialog instead, or leave the code empty and enter the gold price yourself. |
+| Bond details says the price came from sgb.vercel.app | NSE's feed could not be reached at the last refresh, so the page's (possibly older) price was used. Click *Refresh prices* when online. |
 | My EPF sheet's balances differ from the app | The app adds deposits and credited interest itself. Check the deposits and interest you entered for the year; the sheet's own balance columns are not used. |
 | Forgot the password | Not recoverable. Delete `portfolio.enc` to start over. |
 | App locked while I was working | It auto-locks after 30 idle minutes. Unlock and continue; nothing is lost. |
@@ -686,7 +879,7 @@ the employee and employer balances at the rate declared for that year. The app m
 
 ---
 
-## 18. Feature history
+## 21. Feature history
 
 | Date | Added |
 |---|---|
@@ -698,7 +891,7 @@ the employee and employer balances at the rate declared for that year. The app m
 | 2 Nov 2026 | Password protection: encrypted data file, unlock on every start, Lock button, auto-lock, change password. No recovery by design. |
 | 3 Nov 2026 | Edit fund rework: re-link a fund to the correct AMFI scheme with transactions untouched; optional folio correction on existing transactions; Edit action on portfolio rows. |
 | 3 Nov 2026 | Fix: vaults migrated from the unencrypted version could not be unlocked (WAL header). |
-| 3 Nov 2026 | Purchases spread over several folios (e.g. `7999131051/79935563576`) are split into one transaction per folio with the amount and units divided equally, both in the import and in the Add transaction form. |
+| 3 Nov 2026 | Purchases spread over several folios (e.g. `1234567890/2345678901`) are split into one transaction per folio with the amount and units divided equally, both in the import and in the Add transaction form. |
 | 3 Nov 2026 | Standalone app window: the exe (and `run.bat`) now open the app in its own window with no console or browser tabs; closing the window quits. Messages go to `data\app.log`. |
 | 3 Nov 2026 | Redemptions: a third transaction type for sales. Units held fall, sale proceeds count in XIRR, realised gains are tracked with FIFO matching, and the investment figure becomes the cost of the units still held. The import recognises sales from negative units, type words, or positive amounts in a file whose purchases are negative. |
 | 3 Nov 2026 | Stocks: shares and ETFs on any exchange, in any currency, alongside mutual funds. Symbol search and daily prices from Yahoo Finance; each stock tracked in its own currency with rupee equivalents; portfolio totals, chart and XIRR in rupees using daily exchange rates; Mutual funds vs stocks split and per-currency lines on the portfolio page; Buy / Sell wording, accounts instead of folios, and broker-style columns (Symbol, Qty, Price, B/S) in the import. |
@@ -707,6 +900,14 @@ the employee and employer balances at the rate declared for that year. The app m
 | 4 Nov 2026 | Dividends are shown as realised, together with gains from sales, never inside the unrealised profit; the investment figure is also shown net of dividends received. |
 | 4 Nov 2026 | Exit and closed holdings: an Exit button records the sale of everything held; any sale that brings the units to zero marks the holding Closed and lists it under a Closed tab on the portfolio page, keeping all its data. |
 | 4 Nov 2026 | Version 0.4.0: the version is shown in the top bar; upgrades can no longer show stale screens (the window cache is cleared on start and the server forbids caching), and starting a newer exe replaces an older instance that is still running. |
+| 6 Nov 2026 | Version 0.10.0: cloud backup. Connect Google Drive, OneDrive or Dropbox through the provider's own sign-in (one-time client ID setup); every change is uploaded a few seconds later, any device can restore the latest copy, and the lock screen points out a newer copy saved elsewhere. |
+| 6 Nov 2026 | Android app: the backend and frontend packaged for a phone (an APK built from the android folder), with the vault opened from and saved to any file or cloud folder from a long-press menu. |
+| 6 Nov 2026 | Version 0.9.0: a Data folder setting (Change folder… on the lock screen; kept in settings.json next to the exe) so the vault can live in a cloud-synced folder, and a guard that locks the app instead of overwriting a vault file another device or a sync client replaced, keeping its own unsaved changes in a side file. The lock screen shows where the vault file is. Request models now run on pydantic v1 as well as v2, for the Android build. |
+| 6 Nov 2026 | Version 0.8.2: gold bond prices now come from NSE's own feed (today's traded price of every live series), with sgb.vercel.app supplying the history, issue details and IBJA rate and standing in when NSE is unreachable; the Bond details card names the feed. |
+| 6 Nov 2026 | Version 0.8.1: gold bonds priced automatically. A bond with an NSE code takes the series' last traded price (and a short history) from sgb.vercel.app, refreshed with the other prices; the add dialog lists every series with its issue date and price; the Bond details card shows the price source and the IBJA gold price RBI redeems at. The entered gold price remains for bonds without a code. |
+| 6 Nov 2026 | Version 0.8.0: Sovereign Gold Bonds. A gold bond holds grams bought at a price per gram, is valued at a gold price per gram you enter (shared by every bond, with its date and history), records half-yearly interest like dividends, and shows its issue terms, interest schedule, early-redemption date and maturity; sheets in the mutual fund layout import directly, and their Current Value line can set the gold price. Kind chips now show whenever more than one kind is held. |
+| 6 Nov 2026 | Version 0.7.1: the subtotal row of each holding group shows the group's XIRR (active holdings on the Active tab, closed ones on the Closed tab). |
+| 5 Nov 2026 | Version 0.7.0: PPF accounts. Deposits entry by entry or a financial year at a time from your sheet (Before / After 5th decides the date), the year's interest entered as data (the sheet's monthly figures added up, dated 31 March), a by-year table, the deposits-and-interest chart, maturity 15 financial years after opening with the time left, and a PPF slice in the allocation ring. |
 | 5 Nov 2026 | Fixed a rare freeze: when two requests overlapped (for example a page opening while prices refreshed) the app could stop answering until restarted. |
 | 5 Nov 2026 | Version 0.6.2: EPF page gains a Deposits and interest by year chart, one stacked column per financial year in three colours (employee deposits, employer deposits, interest credited). |
 | 5 Nov 2026 | Version 0.6.1: holding groups on the portfolio can be collapsed and expanded by clicking the group heading; the choice is remembered. |

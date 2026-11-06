@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A rising bar chart on the blue launcher background. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#ffffff" android:fillAlpha="0.92"
+        android:pathData="M30,66 h10 v16 h-10 z" />
+    <path android:fillColor="#ffffff" android:fillAlpha="0.92"
+        android:pathData="M46,54 h10 v28 h-10 z" />
+    <path android:fillColor="#ffffff" android:fillAlpha="0.92"
+        android:pathData="M62,42 h10 v40 h-10 z" />
+    <path android:fillColor="#ffd166"
+        android:pathData="M28,46 L44,36 L58,42 L78,24 L78,32 L58,50 L44,44 L28,54 z" />
+</vector>

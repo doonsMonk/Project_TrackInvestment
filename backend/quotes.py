@@ -1,6 +1,6 @@
 """Stock prices and exchange rates: Yahoo Finance's public chart / search endpoints.
 
-Any listed stock or ETF on any exchange is addressed by its Yahoo symbol (RELIANCE.NS, ALL.AX,
+Any listed stock or ETF on any exchange is addressed by its Yahoo symbol (RELIANCE.NS, BHP.AX,
 AAPL, VOD.L ...). Exchange rates are the same kind of series under symbols like 'AUDINR=X'.
 Daily closes are cached in the encrypted database (table `quotes`) exactly like NAVs, so the app
 keeps working offline with the last-fetched values; a symbol is re-fetched when its cache is older

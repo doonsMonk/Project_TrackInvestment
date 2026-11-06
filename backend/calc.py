@@ -341,8 +341,22 @@ def combine_histories(histories: list[list[dict]]) -> list[dict]:
     return out
 
 
+def _group_xirr(members: list[dict], today: date) -> float | None:
+    """XIRR of a set of holdings: their cashflows together, plus what they are worth today."""
+    flows = [fl for f in members for fl in f.get("flows") or []]
+    if not flows:
+        return None
+    value = sum(f["summary"].get("current_value", 0.0) for f in members)
+    if value > 0:
+        flows = flows + [(today, value)]
+    return xirr(flows)
+
+
 def portfolio_totals(funds: list[dict], flows: list[tuple[date, float]], today: date) -> dict:
-    """Roll up per-holding summaries plus the combined cashflow XIRR, locked / redeemable split and kind split."""
+    """Roll up per-holding summaries plus the combined cashflow XIRR, locked / redeemable split and kind split.
+    Each entry may carry its own `flows` (investor cashflows in the base currency); the kind split then gets an
+    XIRR per asset class: `xirr` over every holding of the class, `active_xirr` over the open ones (with their
+    value today as the final inflow) and `closed_xirr` over the sold-out ones."""
     s = lambda key, pred=lambda f: True: sum(f["summary"].get(key, 0.0) for f in funds if pred(f))  # noqa: E731
     invested = s("invested")
     current = s("current_value")
@@ -362,8 +376,12 @@ def portfolio_totals(funds: list[dict], flows: list[tuple[date, float]], today: 
         k["closed" if f.get("closed") else "count"] += 1  # count = active holdings
         for key in ("invested", "current_value", "realised_gain", "dividends", "charges"):
             k[key] = round(k[key] + f["summary"].get(key, 0.0), 2)
-    for k in by_kind.values():
+    for kind, k in by_kind.items():
         k["profit"] = round(k["current_value"] - k["invested"], 2)
+        members = [f for f in funds if (f.get("kind") or "MF") == kind]
+        k["xirr"] = _group_xirr(members, today)
+        k["active_xirr"] = _group_xirr([f for f in members if not f.get("closed")], today)
+        k["closed_xirr"] = _group_xirr([f for f in members if f.get("closed")], today)
     return {
         "by_kind": by_kind,
         "invested": round(invested, 2),

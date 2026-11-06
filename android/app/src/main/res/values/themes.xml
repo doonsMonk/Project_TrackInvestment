@@ -1,0 +1,11 @@
+<resources>
+    <style name="Theme.InvestmentTracker" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#2a78d6</item>
+        <item name="colorPrimaryVariant">#1f5fae</item>
+        <item name="colorOnPrimary">#ffffff</item>
+        <item name="colorSecondary">#eb6834</item>
+        <item name="android:statusBarColor">#fcfcfb</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">#fcfcfb</item>
+    </style>
+</resources>
