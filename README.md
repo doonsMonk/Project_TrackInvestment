@@ -1,6 +1,6 @@
 # Investment Tracker
 
-A local web app for tracking Indian mutual funds, stocks on any exchange, NPS accounts, EPF, PPF and Sovereign Gold Bonds: funds with
+A local web app for tracking Indian mutual funds, stocks on any exchange, NPS accounts, EPF, PPF, Sovereign Gold Bonds, fixed deposits and life insurance policies: funds with
 folios, stocks with accounts, NPS schemes E / C / G with their own NAVs, EPF and PPF deposits and credited interest, purchases / sales / dividends / bonus units, live NAVs and prices, current
 value, profit, XIRR, value-over-time charts, currency conversion to INR, and how much of the
 portfolio is locked versus redeemable.
@@ -148,7 +148,19 @@ and interest dates and the IBJA gold price; one fetch each for every series, cac
 gold price per gram the user enters (`backend/gold.py`,
 `quotes` symbol `GOLD:INR`, shared by every such holding; Yahoo Finance does not carry the SGB series); the payload
 adds `gold` with the interest schedule (2.5 % a year on `details.issue_price`, half-yearly), the early-redemption
-date and the maturity worked out from `details.issue_date`. A stock is tracked in its exchange's
+date and the maturity worked out from `details.issue_date`. A fixed deposit (`kind: FD`, `backend/fd.py`) is
+rupees as units: the deposit is a LUMPSUM at 1, the terms live in `details` (`bank`, `maturity_date`,
+`maturity_value`, `rate`, `payout`), and its price source is a synthetic daily factor, (maturity value ÷
+principal)^(elapsed ÷ term) from the deposit date, 1 before it and the full ratio after maturity; interest paid
+out is a DIVIDEND, and a REDEMPTION without units takes every unit held at amount ÷ units, so the holding
+closes with the interest as its realised gain; the payload adds `fd` (principal, terms, effective rate, days,
+accrued, `matured` / `awaiting_payout`). An insurance policy (`kind: INS`, `backend/policy.py`) works the same way
+with many deposits: premiums are SIPs at 1, `details` hold `insurer`, `plan`, `premium`, `frequency`, `first_premium`,
+`last_premium`, `maturity_date`, `maturity_value`, `sum_assured`; the due dates follow from the first premium and the
+frequency up to the last premium (default: the last due date before maturity); the policy rate is `calc.xirr` over
+the premiums paid, the premiums still due, the benefits received (DIVIDENDs) and the maturity value, and the daily
+factor is the premiums paid grown at that rate divided by the rupees paid, so the holding's XIRR equals the policy
+rate; the payload adds `policy` (schedule counts, next due, overdue, totals, rate, accrued, flags). A stock is tracked in its exchange's
 currency; the portfolio converts to INR at daily exchange rates (each cashflow at its own date's rate,
 today's value at the latest rate), so the INR return includes the currency movement and the holding's
 page shows the return in both currencies.
@@ -210,6 +222,12 @@ page shows the return in both currencies.
 - Gold bond page: grams at a price per gram, interest receipts, a Bond details card (issue terms, interest
   schedule, early redemption, maturity) and a Gold price dialog that values every gold bond; a sheet's
   Current Value line can record the gold price on import
+- Fixed deposit page: principal, maturity value, effective rate and XIRR tiles, a Deposit details card and a
+  Matured / paid out button; the add dialog records the deposit in one go, and a sheet's Final Value at
+  maturity line sets the terms on import
+- Insurance policy page: premiums paid of the schedule, maturity value, policy return and XIRR tiles, a Policy
+  details card, Premium paid and Matured / paid out buttons, overdue-premium banners; the add dialog back-fills
+  every premium due so far, and a premium sheet (paid rows, future rows, Value at maturity line) sets the terms
 - Active / Closed tabs on the holdings table, rows grouped by asset class with subtotals and a per-class XIRR (groups collapse on click); closed holdings
   show bought, sold-for, realised (incl. dividends) and final XIRR
 
@@ -240,6 +258,12 @@ the entered gold price per gram (`/api/gold/price`) serves bonds without an NSE 
 - EPF and PPF need no new maths: with one rupee per unit, `summarize` on each share gives deposits (invested),
   balance (value), interest (bonus units) and XIRR; `calc.aggregate` adds the shares up, and the return on own
   contributions is `xirr` over employee deposits plus today's balance. Interest is entered, never computed.
+- A fixed deposit needs no price feed either: `backend/fd.py` turns the principal, deposit date and maturity
+  date / value into a daily factor series, so `summarize` and `value_history` work unchanged and the XIRR
+  comes out as the effective rate.
+- An insurance policy generalises that to many deposits: `backend/policy.py` solves the plan's own IRR with
+  `calc.xirr` (premiums paid and scheduled, benefits, maturity value) and grows the premiums paid at it, so the
+  value per rupee paid is a daily series like any NAV and the holding's XIRR equals the policy rate.
 - Transaction types: SIP, LUMPSUM (purchases), REDEMPTION (sale), DIVIDEND (cash in, holdings
   unchanged), BONUS (free units, a zero-cost lot), SWITCH_OUT / SWITCH_IN (a sale and a purchase funded
   inside the holding, as in an NPS rebalance) and CHARGE (a sale whose proceeds are lost). Amounts and
@@ -289,7 +313,7 @@ data/                             portfolio.enc (encrypted database, created on 
 | GET | `/api/portfolio` | Totals in the base currency, per-holding rows, combined history, kind split, per-currency lines, locked / redeemable split |
 | GET, POST | `/api/funds` | List holdings with summaries / create one. Body: `kind` (`MF` with `scheme_code`, or `STOCK` with `symbol`), `name`, `folio_number`, `locked`, `lock_in_until`, `notes` |
 | GET, PUT, DELETE | `/api/funds/{id}` | Holding detail with transactions, history (and `base` / `history_base` in the base currency for a foreign stock) and per-folio summaries / update / delete. `?folio=` scopes the detail to one folio |
-| POST | `/api/funds/{id}/transactions` | Add a transaction (`SIP`, `LUMPSUM`, `REDEMPTION`, `DIVIDEND`, `BONUS`, `SWITCH_IN`, `SWITCH_OUT`, `CHARGE`; `scheme` for NPS / EPF; `rate` for EPF) |
+| POST | `/api/funds/{id}/transactions` | Add a transaction (`SIP`, `LUMPSUM`, `REDEMPTION`, `DIVIDEND`, `BONUS`, `SWITCH_IN`, `SWITCH_OUT`, `CHARGE`; `scheme` for NPS / EPF; `rate` for EPF; an FD / policy `REDEMPTION` without `units` pays out every unit held) |
 | GET | `/api/cloud/status` | Setup / connection / last backup per provider; `?check=true` also looks at the cloud copy |
 | PUT | `/api/cloud/credentials` | Store a provider's OAuth client ID (and secret) in settings.json |
 | POST | `/api/cloud/connect` | Start the sign-in: returns the consent URL; the provider returns to `/api/cloud/callback` |

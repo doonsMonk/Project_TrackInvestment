@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from .compat import field_validator, list_limits, model_validator  # pydantic v2 on the PC, v1 on Android
 
-from . import calc, cloud, db, gold, nav, nps, quotes, sgb
+from . import calc, cloud, db, fd, gold, nav, nps, policy, quotes, sgb
 
 # In the PyInstaller build the frontend is unpacked under sys._MEIPASS; in a dev checkout it's <project>/frontend.
 _BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
@@ -27,6 +27,9 @@ FRONTEND_DIR = Path(os.environ["INVESTMENT_TRACKER_FRONTEND"]) if os.environ.get
 
 MF, STOCK, NPS, EPF, PPF = "MF", "STOCK", "NPS", "EPF", "PPF"
 GOLD = "GOLD"  # Sovereign Gold Bonds: grams valued at a gold price per gram entered by the user
+FD = "FD"  # fixed deposits: rupees valued along the curve from the principal to the maturity value
+INS = "INS"  # life insurance policies: premiums on a schedule, valued at the policy's own rate of return towards the maturity value
+TERM_KINDS = (FD, INS)  # rupees as units, priced along a curve to a maturity value known in advance
 RUPEE_KINDS = (EPF, PPF)  # no price source: a rupee is a unit, deposits are purchases, interest is zero-cost units
 EPF_SHARES = {"EE": "Employee share", "ER": "Employer share", "EPS": "Pension scheme (EPS)"}
 BASE = quotes.BASE_CURRENCY
@@ -40,7 +43,7 @@ async def lifespan(_: FastAPI):
     db.vault.lock()  # flush and forget the key on shutdown
 
 
-VERSION = "0.10.0"
+VERSION = "0.12.0"
 app = FastAPI(title="Investment Tracker", version=VERSION, lifespan=lifespan)
 
 
@@ -307,7 +310,7 @@ class FundIn(BaseModel):
     or an NPS account (pension fund manager + tier, with one NPS Trust scheme id per asset class E / C / G / A)."""
 
     name: str = Field(min_length=1, max_length=200)
-    kind: Literal["MF", "STOCK", "NPS", "EPF", "PPF", "GOLD"] = MF
+    kind: Literal["MF", "STOCK", "NPS", "EPF", "PPF", "GOLD", "FD", "INS"] = MF
     scheme_code: Optional[int] = Field(default=None, gt=0)
     symbol: Optional[str] = Field(default=None, max_length=40)
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3,
@@ -382,6 +385,61 @@ class FundIn(BaseModel):
                 "issue_date_from": str(d.get("issue_date_from") or "") or None,  # "sgb" when filled from the exchange list
                 "issue_price": price,
                 "isin": str(d.get("isin") or "").strip().upper() or None,
+            }
+            self.scheme_code = None
+        elif self.kind == INS:
+            d = self.details if isinstance(self.details, dict) else {}
+            nums = {}
+            for key in ("premium", "maturity_value", "sum_assured"):
+                try:
+                    nums[key] = float(d[key]) if d.get(key) not in (None, "") else None
+                except (TypeError, ValueError) as e:
+                    raise ValueError(f"{key} must be a number") from e
+                if nums[key] is not None and nums[key] <= 0:
+                    raise ValueError(f"{key} must be positive")
+            freq = str(d.get("frequency") or "yearly")
+            if freq not in policy.FREQUENCIES:
+                raise ValueError("frequency must be yearly, half-yearly, quarterly or monthly")
+            dates = {}
+            for key in ("first_premium", "last_premium", "maturity_date"):
+                raw = d.get(key)
+                dates[key] = _iso_date_or_none(str(raw)) if raw else None
+                if raw and dates[key] is None:
+                    raise ValueError(f"{key} must be a date (YYYY-MM-DD)")
+            if dates["first_premium"] and dates["maturity_date"] and dates["maturity_date"] <= dates["first_premium"]:
+                raise ValueError("the maturity date must be after the first premium")
+            if dates["first_premium"] and dates["last_premium"] and dates["last_premium"] < dates["first_premium"]:
+                raise ValueError("the last premium cannot be before the first")
+            self.details = {
+                "insurer": str(d.get("insurer") or "").strip()[:120],
+                "plan": str(d.get("plan") or "").strip()[:120],
+                "frequency": freq,
+                **nums,
+                **dates,
+            }
+            self.scheme_code = None
+        elif self.kind == FD:
+            d = self.details if isinstance(self.details, dict) else {}
+            mv, rate = d.get("maturity_value"), d.get("rate")
+            try:
+                mv = float(mv) if mv not in (None, "") else None
+                rate = float(rate) if rate not in (None, "") else None
+            except (TypeError, ValueError) as e:
+                raise ValueError("maturity_value and rate must be numbers") from e
+            if mv is not None and mv <= 0:
+                raise ValueError("maturity_value must be positive")
+            if rate is not None and not 0 <= rate <= 100:
+                raise ValueError("rate must be a percentage")
+            md = d.get("maturity_date")
+            payout = str(d.get("payout") or "cumulative")
+            if payout not in ("cumulative", "periodic"):
+                raise ValueError("payout must be cumulative or periodic")
+            self.details = {
+                "bank": str(d.get("bank") or "").strip()[:120],
+                "maturity_date": _iso_date_or_none(str(md)) if md else None,
+                "maturity_value": mv,
+                "rate": rate,
+                "payout": payout,
             }
             self.scheme_code = None
         elif self.kind == PPF:
@@ -471,7 +529,10 @@ class TxnIn(BaseModel):
 
 
 def _require_price(body: TxnIn, kind: str) -> None:
-    """A single purchase / sale needs a price or units, except for EPF / PPF where a rupee is a unit."""
+    """A single purchase / sale needs a price or units, except for EPF / PPF where a rupee is a unit (and an FD
+    deposit, which is rupees too; an FD payout gets its units and factor from the route)."""
+    if kind in TERM_KINDS and body.type in calc.PURCHASES:
+        return
     if kind not in RUPEE_KINDS and body.type not in CASH_ONLY + UNITS_ONLY + UNIT_MOVES and body.nav is None and body.units is None:
         raise HTTPException(status_code=422, detail="NAV / price (or units) is required")
 
@@ -590,6 +651,8 @@ def _prepare_source(conn: sqlite3.Connection, body: FundIn) -> tuple[Optional[st
         return ("; ".join(errors.values()) or None), MF_CURRENCY, None
     if body.kind in RUPEE_KINDS:
         return None, MF_CURRENCY, None  # no price source: an EPF / PPF balance is deposits plus the interest you enter
+    if body.kind in TERM_KINDS:
+        return None, MF_CURRENCY, None  # valued along a curve to the maturity value; nothing to fetch
     if body.kind == GOLD:
         # With an NSE code the series is priced from sgb.vercel.app and its issue details fill any empty fields;
         # without one (or offline) the bond is valued at the gold price per gram the user enters.
@@ -626,6 +689,15 @@ def _prepare_source(conn: sqlite3.Connection, body: FundIn) -> tuple[Optional[st
 
 def _price_source(conn: sqlite3.Connection, fund: dict, with_history: bool):
     """(history, latest) for a fund or stock from its own price table; gold holdings share the entered gold price."""
+    if fund["kind"] == FD:
+        t = fd.terms(fund["details"], _txns(conn, fund["id"]))
+        today = dt.date.today().isoformat()
+        return (fd.series(t, dt.date.today()) if with_history else []), (today, fd.factor(t, today))
+    if fund["kind"] == INS:
+        t = policy.terms(fund["details"], _txns(conn, fund["id"]))
+        now = dt.date.today()
+        r = policy.rate(t, now)
+        return (policy.series(t, r, now) if with_history else []), (now.isoformat(), policy.factor(t, r, now.isoformat()))
     if fund["kind"] == GOLD:
         code = (fund["details"] or {}).get("code")
         if code and sgb.latest(conn, code):
@@ -646,6 +718,11 @@ def _price_on_or_before(conn: sqlite3.Connection, row: sqlite3.Row, iso_date: st
         return nps.on_or_before(conn, sid, iso_date) if sid else None
     if row["kind"] in RUPEE_KINDS:
         return (iso_date, 1.0)  # rupees in, rupees out: one unit is one rupee
+    if row["kind"] == FD:
+        return (iso_date, fd.factor(fd.terms(_fund_dict(row)["details"], _txns(conn, row["id"])), iso_date))
+    if row["kind"] == INS:
+        t = policy.terms(_fund_dict(row)["details"], _txns(conn, row["id"]))
+        return (iso_date, policy.factor(t, policy.rate(t, dt.date.today()), iso_date))
     if row["kind"] == GOLD:
         code = (_fund_dict(row)["details"] or {}).get("code")
         return (sgb.on_or_before(conn, code, iso_date) if code else None) or gold.on_or_before(conn, iso_date)
@@ -958,6 +1035,11 @@ def _fund_payload(conn: sqlite3.Connection, row: sqlite3.Row, detail: bool = Fal
     fund["closed_on"] = full["closed_on"]
     fund["scheme"] = nav.scheme_meta(conn, fund["scheme_code"]) if fund["kind"] == MF else None
     fund["quote"] = quotes.meta(conn, fund["symbol"]) if fund["kind"] == STOCK else None
+    if fund["kind"] == FD:
+        fund["fd"] = fd.info(fd.terms(fund["details"], all_txns), today, full["current_value"], full["units"])
+    if fund["kind"] == INS:
+        t = policy.terms(fund["details"], all_txns)
+        fund["policy"] = policy.info(t, policy.rate(t, today), today, full["current_value"], full["units"])
     if fund["kind"] == GOLD:
         d = fund["details"] or {}
         issue = d.get("issue_date") or min((t["date"] for t in all_txns if t["type"] in calc.PURCHASES), default=None)
@@ -1341,9 +1423,22 @@ def _check_scheme(row: sqlite3.Row, scheme: str) -> str:
     return scheme
 
 
+def _fd_payout(conn: sqlite3.Connection, fund_id: int, body: TxnIn, exclude_id: Optional[int] = None) -> None:
+    """An FD or policy payout (maturity, premature closure, surrender) takes every unit still held at the amount received."""
+    if body.type != calc.REDEMPTION or body.units:
+        return
+    held = calc.summarize([t for t in _txns(conn, fund_id) if t["id"] != exclude_id], None, dt.date.today())["units"] or 0.0
+    if held <= 0:
+        raise HTTPException(status_code=422, detail="There is no deposit left to pay out")
+    if not body.amount or body.amount <= 0:
+        raise HTTPException(status_code=422, detail="Enter the amount received")
+    body.units = round(held, 2)
+    body.nav = body.amount / held
+
+
 def _txn_values(body: TxnIn, scheme: str, kind: str = MF) -> tuple:
     amount = body.amount
-    if kind in RUPEE_KINDS:
+    if kind in RUPEE_KINDS or (kind in TERM_KINDS and body.type in calc.PURCHASES):
         # Rupees are the units: a deposit of 750 is 750 units at 1; interest is 13 free units (zero cost).
         units = body.units if body.type in UNITS_ONLY else amount
         if not units or units <= 0:
@@ -1378,6 +1473,8 @@ _TXN_INSERT = "INSERT INTO transactions(fund_id, date, folio_number, scheme, typ
 def add_txn(fund_id: int, body: TxnIn, conn: sqlite3.Connection = Depends(get_conn)):
     row = _fund_row(conn, fund_id)
     scheme = _check_scheme(row, body.scheme)
+    if row["kind"] in TERM_KINDS:
+        _fd_payout(conn, fund_id, body)
     _require_price(body, row["kind"])
     with conn:
         cur = conn.execute(_TXN_INSERT, (fund_id, *_txn_values(body, scheme, row["kind"])))
@@ -1431,10 +1528,19 @@ def add_txns_bulk(fund_id: int, body: BulkTxnIn, conn: sqlite3.Connection = Depe
         _auto_refresh(conn, [row])  # use whatever history is cached if the source is down
     values = []
     problems = []
+    fd_held = None
     for i, t in enumerate(body.transactions):
         scheme = _check_scheme(row, t.scheme)
         nav_value, units, amount = t.nav, t.units, t.amount
-        if row["kind"] in RUPEE_KINDS:
+        if row["kind"] in TERM_KINDS and t.type == calc.REDEMPTION and not units:
+            if fd_held is None:
+                fd_held = calc.summarize(_txns(conn, fund_id), None, dt.date.today())["units"] or 0.0  # already recorded
+            held = fd_held + sum(v[7] for v in values if v[4] in calc.PURCHASES) - sum(v[7] for v in values if v[4] == calc.REDEMPTION)
+            if held <= 0 or not amount:
+                problems.append(f"row {i + 1}: nothing left to pay out, or no amount")
+                continue
+            nav_value, units = amount / held, round(held, 2)
+        if row["kind"] in RUPEE_KINDS or (row["kind"] in TERM_KINDS and t.type in calc.PURCHASES):
             nav_value = 1.0
             units = units if t.type in UNITS_ONLY else amount
             if not units or units <= 0:
@@ -1484,6 +1590,8 @@ def update_txn(txn_id: int, body: TxnIn, conn: sqlite3.Connection = Depends(get_
         raise HTTPException(status_code=404, detail="Transaction not found")
     fund_row = _fund_row(conn, existing["fund_id"])
     scheme = _check_scheme(fund_row, body.scheme)
+    if fund_row["kind"] in TERM_KINDS:
+        _fd_payout(conn, existing["fund_id"], body, exclude_id=txn_id)
     _require_price(body, fund_row["kind"])
     with conn:
         conn.execute(

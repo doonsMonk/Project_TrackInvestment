@@ -27,6 +27,10 @@ const KINDS = {
          types: { SIP: 'Deposit', LUMPSUM: 'Transfer in', REDEMPTION: 'Withdrawal', DIVIDEND: 'Dividend', BONUS: 'Interest credited', ...MOVE_TYPES }, sold: 'withdrawn' },
   GOLD: { key: 'GOLD', label: 'Sovereign Gold Bond', lower: 'gold bond', plural: 'Gold', price: 'Price per gram', realisedWhat: 'from sales', dividendWord: 'interest', folio: 'Folio', folioPlural: 'folios', unit: 'grams', priceDecimals: 2,
           types: { SIP: 'SIP', LUMPSUM: 'Purchase', REDEMPTION: 'Redemption / sale', DIVIDEND: 'Interest', BONUS: 'Bonus units', ...MOVE_TYPES }, sold: 'sold' },
+  FD: { key: 'FD', label: 'Fixed deposit', lower: 'fixed deposit', plural: 'Fixed deposits', price: 'Value per rupee', realisedWhat: 'at payout', dividendWord: 'interest', folio: 'Account number', folioPlural: 'account numbers', unit: 'rupees', priceDecimals: 4,
+        types: { SIP: 'Deposit', LUMPSUM: 'Deposit', REDEMPTION: 'Payout', DIVIDEND: 'Interest paid out', BONUS: 'Bonus', ...MOVE_TYPES }, sold: 'paid out' },
+  INS: { key: 'INS', label: 'Insurance policy', lower: 'policy', plural: 'Insurance policies', price: 'Value per rupee', realisedWhat: 'at payout', dividendWord: 'benefits', folio: 'Policy number', folioPlural: 'policy numbers', unit: 'rupees', priceDecimals: 4,
+         types: { SIP: 'Premium', LUMPSUM: 'Single premium / top-up', REDEMPTION: 'Payout', DIVIDEND: 'Benefit received', BONUS: 'Bonus', ...MOVE_TYPES }, sold: 'paid out' },
 };
 const EPF_SHARES = { EE: 'Employee share', ER: 'Employer share', EPS: 'Pension (EPS)' };
 /** Indian financial year of an ISO date: '2011-02-15' -> '2010-11'. */
@@ -37,6 +41,10 @@ const ppfMaturityDate = (iso) => { const y = Number(iso.slice(0, 4)); const star
 const addYears = (iso, n) => { const d = new Date(`${iso}T00:00:00`); d.setFullYear(d.getFullYear() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const goldMaturityText = (g) => (!g?.maturity ? '' : g.matured ? `matured ${fmtDate(g.maturity)}` : `matures ${fmtDate(g.maturity)}`);
 const ppfMaturityText = (p) => (!p?.matures_on ? '' : p.extended_till ? `matured ${fmtDate(p.matures_on)} · extended till ${fmtDate(p.extended_till)}` : `matures ${fmtDate(p.matures_on)}`);
+const fdMaturityText = (x) => (!x?.maturity_date ? '' : x.awaiting_payout ? `matured ${fmtDate(x.maturity_date)} · awaiting payout` : x.matured ? `matured ${fmtDate(x.maturity_date)}` : `matures ${fmtDate(x.maturity_date)}`);
+/** ISO date n months later, the day clamped to the month's end (14 Feb + 12 -> 14 Feb; 31 Jan + 1 -> 28/29 Feb). */
+const addMonths = (iso, n) => { const [y, m, d] = iso.split('-').map(Number); const t = new Date(y, m - 1 + n, 1); const last = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate(); t.setDate(Math.min(d, last)); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`; };
+const FREQ_MONTHS = { yearly: 12, 'half-yearly': 6, quarterly: 3, monthly: 1 };
 const CHIP_CLASS = { REDEMPTION: ' redemption', DIVIDEND: ' dividend', BONUS: ' bonus', SWITCH_IN: ' switch', SWITCH_OUT: ' switch', CHARGE: ' charge' };
 const kindOf = (f) => KINDS[f?.kind] || KINDS.MF;
 const SCHEME_NAMES = { E: 'Equity', C: 'Corporate bonds', G: 'Government securities', A: 'Alternative assets' };
@@ -48,6 +56,8 @@ const ASSET_CLASSES = [
   { kind: 'EPF', label: 'EPF', one: 'account', many: 'accounts' },
   { kind: 'PPF', label: 'PPF', one: 'account', many: 'accounts' },
   { kind: 'GOLD', label: 'Gold', one: 'holding', many: 'holdings' },
+  { kind: 'FD', label: 'Fixed deposits', one: 'deposit', many: 'deposits' },
+  { kind: 'INS', label: 'Insurance', one: 'policy', many: 'policies' },
 ];
 let BASE = 'INR'; // portfolio currency, confirmed by the server on boot
 
@@ -122,7 +132,7 @@ function netOfDividends(s, M, divWord = 'dividends') {
 }
 
 function kindChip(f) {
-  const short = { STOCK: 'Stock', NPS: 'NPS', EPF: 'EPF', PPF: 'PPF', GOLD: 'Gold' }[f.kind] || 'MF';
+  const short = { STOCK: 'Stock', NPS: 'NPS', EPF: 'EPF', PPF: 'PPF', GOLD: 'Gold', FD: 'FD', INS: 'Policy' }[f.kind] || 'MF';
   return `<span class="chip kind${f.kind === 'MF' || !f.kind ? '' : ` ${f.kind.toLowerCase()}`}">${short}</span>`;
 }
 
@@ -322,6 +332,10 @@ async function renderPortfolio() {
           ? ['EPF', f.details?.employer, f.epf?.pending_interest_fy ? `interest for FY ${f.epf.pending_interest_fy} pending` : ''].filter(Boolean).join(' · ')
           : f.kind === 'GOLD'
             ? ['Sovereign Gold Bond', f.details?.code, goldMaturityText(f.gold), f.gold?.price ? '' : 'no gold price entered'].filter(Boolean).join(' · ')
+          : f.kind === 'FD'
+            ? ['Fixed deposit', f.details?.bank, fdMaturityText(f.fd), f.fd?.has_terms || f.closed ? '' : 'maturity not set'].filter(Boolean).join(' · ')
+          : f.kind === 'INS'
+            ? ['Insurance policy', f.details?.insurer, f.details?.plan, fdMaturityText(f.policy), f.closed ? '' : f.policy?.overdue ? `${f.policy.overdue} premium${f.policy.overdue === 1 ? '' : 's'} due` : f.policy?.next_due ? `next premium ${fmtDate(f.policy.next_due)}` : '', f.policy?.has_terms || f.closed ? '' : 'maturity not set'].filter(Boolean).join(' · ')
           : f.kind === 'PPF'
             ? ['PPF', f.details?.bank, ppfMaturityText(f.ppf), f.ppf?.pending_interest_fy ? `interest for FY ${f.ppf.pending_interest_fy} pending` : ''].filter(Boolean).join(' · ')
             : f.scheme?.scheme_category;
@@ -752,6 +766,124 @@ function mountYearChart(f, share, currency) {
   state.yearChart = stackedColumns(canvas, years.map((y) => `FY ${y.fy}`), series, { currency, totalLabel: 'Year total' });
 }
 
+/** Fixed deposit: the four headline tiles. */
+function fdTiles(s, M, f) {
+  const x = f.fd || {};
+  const paidOut = f.closed || !(s.units > 0);
+  const rate = isNum(x.effective_rate) ? `${(x.effective_rate * 100).toFixed(2)}%` : isNum(x.quoted_rate) ? `${x.quoted_rate}%` : '–';
+  return [
+    tile('Principal', M(x.principal || s.purchased || 0), [x.deposit_date ? `deposited ${fmtDate(x.deposit_date)}` : 'no deposit recorded yet', isNum(x.quoted_rate) ? `quoted ${x.quoted_rate}% a year` : ''].filter(Boolean).join(' · ')),
+    paidOut
+      ? tile('Paid out', M(s.redeemed || 0), [f.closed_on ? `on ${fmtDate(f.closed_on)}` : '', isNum(s.realised_gain) ? `${M(s.realised_gain)} interest earned` : '', s.dividends ? `${M(s.dividends)} paid out before` : ''].filter(Boolean).join(' · '))
+      : x.has_terms
+        ? tile('Maturity value', M(x.maturity_value), [`on ${fmtDate(x.maturity_date)}`, isNum(x.interest_at_maturity) ? `${M(x.interest_at_maturity)} interest` : '', x.matured ? 'matured · record the payout' : timeLeft(x.maturity_date) || `${x.days_left} days left`].filter(Boolean).join(' · '))
+        : tile('Maturity value', '–', 'set the maturity date and value with Edit fixed deposit'),
+    tile('Interest rate', rate, isNum(x.effective_rate) ? `a year, worked out from the principal and the maturity value${isNum(x.quoted_rate) ? ` · ${x.quoted_rate}% quoted` : ''}` : isNum(x.quoted_rate) ? 'quoted by the bank' : 'set the maturity value to see the rate'),
+    tile('XIRR', fmtPct(pct(s.xirr)), paidOut ? 'annualised, on the money paid out' : x.has_terms ? 'annualised, on today\'s accrued value · FD interest is taxable' : 'annualised'),
+  ].join('');
+}
+
+/** Insurance policy: the four headline tiles. */
+function insTiles(s, M, f) {
+  const x = f.policy || {};
+  const paidOut = f.closed || !(s.units > 0);
+  const freq = x.frequency ? ` ${x.frequency}` : '';
+  return [
+    tile('Premiums paid', M(x.paid_total || s.purchased || 0), [isNum(x.premiums_total) ? `${x.premiums_paid} of ${x.premiums_total}` : `${x.premiums_paid || 0} so far`, x.premium ? `${M(x.premium)}${freq}` : '', !paidOut && x.next_due ? (x.overdue ? `${x.overdue} due, not recorded` : `next ${fmtDate(x.next_due)}`) : ''].filter(Boolean).join(' · ')),
+    paidOut
+      ? tile('Paid out', M(s.redeemed || 0), [f.closed_on ? `on ${fmtDate(f.closed_on)}` : '', isNum(s.realised_gain) ? `${M(s.realised_gain)} over the premiums` : '', s.dividends ? `${M(s.dividends)} received before` : ''].filter(Boolean).join(' · '))
+      : x.has_terms
+        ? tile('Maturity value', M(x.maturity_value), [`on ${fmtDate(x.maturity_date)}`, x.matured ? 'matured · record the payout' : timeLeft(x.maturity_date) || `${x.days_left} days left`, x.pending_total ? `${M(x.pending_total)} still to pay` : ''].filter(Boolean).join(' · '))
+        : tile('Maturity value', '–', 'set the maturity date and value with Edit policy'),
+    tile('Policy return', isNum(x.policy_rate) ? fmtPct(x.policy_rate * 100) : '–', isNum(x.policy_rate) ? `a year, over every premium${isNum(x.premiums_total) ? ` (all ${x.premiums_total})` : ''}${x.benefits_received ? ', the benefits received' : ''} and the maturity value` : 'set the maturity value to see it'),
+    tile('XIRR', fmtPct(pct(s.xirr)), paidOut ? 'annualised, on the money paid out' : x.has_terms ? 'annualised, on the premiums paid and today\'s accrued value' : 'annualised'),
+  ].join('');
+}
+
+/** Insurance policy: the plan, the premium schedule and what has happened so far. */
+function insCard(f, cur) {
+  const x = f.policy || {};
+  const d = f.details || {};
+  const s = f.summary || {};
+  const M = (v, dec = 0) => fmtMoney(v, cur, dec);
+  const row = (label, value, sub = '') => (value ? `<tr><td class="nowrap"><b>${label}</b></td><td>${value}${sub ? `<div class="muted small">${sub}</div>` : ''}</td></tr>` : '');
+  const open = s.units > 0 && !f.closed;
+  const rows = [
+    row('Insurer', d.insurer ? esc(d.insurer) : ''),
+    row('Plan', d.plan ? esc(d.plan) : ''),
+    row('Policy number', f.folio_number ? esc(f.folio_number) : ''),
+    row('Premium', x.premium ? `${M(x.premium)} ${esc(x.frequency || 'yearly')}` : '<span class="muted">not set</span>', x.premium ? '' : 'set it with Edit policy, or import the premium rows'),
+    row('Premiums', `${x.premiums_paid || 0} paid${isNum(x.premiums_total) ? ` of ${x.premiums_total}` : ''} · ${M(x.paid_total || 0)}`, [isNum(x.premiums_left) && x.premiums_left ? `${x.premiums_left} still to come · ${M(x.pending_total)}` : '', isNum(x.total_outlay) ? `${M(x.total_outlay)} over the whole term` : ''].filter(Boolean).join(' · ')),
+    row('First premium', x.first_premium ? fmtDate(x.first_premium) : ''),
+    row('Last premium', x.last_premium ? fmtDate(x.last_premium) : '', d.last_premium ? '' : 'the last due date before maturity; set it with Edit policy if premiums stop earlier'),
+    row('Next due', open && x.next_due ? fmtDate(x.next_due) : '', open && x.overdue ? `${x.overdue} premium${x.overdue === 1 ? '' : 's'} fell due without being recorded · record them with Premium paid` : ''),
+    row('Matures', x.maturity_date ? fmtDate(x.maturity_date) : '<span class="muted">not set</span>', x.maturity_date ? (x.matured ? (open ? 'matured · record the payout with Matured / paid out' : 'matured') : timeLeft(x.maturity_date) || `${x.days_left} days left`) : 'from the policy document; set it with Edit policy'),
+    row('Maturity value', isNum(x.maturity_value) ? M(x.maturity_value) : '<span class="muted">not set</span>', isNum(x.maturity_gain) ? `${M(x.maturity_gain)} more than all the premiums` : 'sum assured plus the bonuses you expect, from the policy document or the insurer\'s estimate'),
+    row('Sum assured', isNum(x.sum_assured) ? M(x.sum_assured) : '', 'the life cover; not part of the valuation'),
+    row('Policy return', isNum(x.policy_rate) ? `${fmtPct(x.policy_rate * 100)} a year` : '', 'the rate at which every premium (paid and still due) grows to the maturity value; the policy is valued at it'),
+    row('Value today', open && isNum(s.current_value) ? M(s.current_value) : '', open && isNum(x.accrued) ? `${M(x.accrued)} accrued on the premiums paid` : ''),
+    row('Benefits received', s.dividends ? M(s.dividends) : '', 'survival benefits or bonuses paid out so far'),
+    row('Paid out', !open && s.redeemed ? `${M(s.redeemed)}${f.closed_on ? ` on ${fmtDate(f.closed_on)}` : ''}` : '', isNum(s.realised_gain) ? `${M(s.realised_gain)} more than the premiums paid` : ''),
+  ].join('');
+  return `
+    <section class="card">
+      <div class="card-head"><h2>Policy details</h2><span class="muted small">from the policy document: premiums on a schedule, a maturity value known in advance</span></div>
+      <div class="table-wrap"><table class="data"><tbody>${rows}</tbody></table></div>
+    </section>`;
+}
+
+/** Fixed deposit: the terms from the bank's advice and what has happened so far. */
+function fdCard(f, cur) {
+  const x = f.fd || {};
+  const d = f.details || {};
+  const s = f.summary || {};
+  const M = (v, dec = 0) => fmtMoney(v, cur, dec);
+  const row = (label, value, sub = '') => (value ? `<tr><td class="nowrap"><b>${label}</b></td><td>${value}${sub ? `<div class="muted small">${sub}</div>` : ''}</td></tr>` : '');
+  const open = s.units > 0 && !f.closed;
+  const rows = [
+    row('Bank', d.bank ? esc(d.bank) : ''),
+    row('Account number', f.folio_number ? esc(f.folio_number) : ''),
+    row('Deposited', x.deposit_date ? `${M(x.principal)} on ${fmtDate(x.deposit_date)}` : '<span class="muted">no deposit recorded yet</span>', 'the principal; a further deposit is another Deposit transaction'),
+    row('Interest', d.payout === 'periodic' ? 'Paid out periodically' : 'Cumulative', d.payout === 'periodic' ? 'record each credit as Interest paid out; the maturity value is then usually the principal' : 'added to the deposit and paid with the principal at maturity'),
+    row('Matures', x.maturity_date ? fmtDate(x.maturity_date) : '<span class="muted">not set</span>', x.maturity_date ? (x.matured ? (open ? 'matured · record the payout with Matured / paid out' : 'matured') : `${timeLeft(x.maturity_date) || `${x.days_left} days left`}${isNum(x.days_total) ? ` · ${x.days_total} days in all` : ''}`) : 'from the bank\'s FD advice; set it with Edit fixed deposit'),
+    row('Maturity value', isNum(x.maturity_value) ? M(x.maturity_value) : '<span class="muted">not set</span>', isNum(x.interest_at_maturity) ? `${M(x.interest_at_maturity)} interest over the term` : 'the amount the bank will pay at maturity'),
+    row('Rate', isNum(x.effective_rate) ? `${(x.effective_rate * 100).toFixed(2)}% a year` : isNum(x.quoted_rate) ? `${x.quoted_rate}% a year (quoted)` : '', isNum(x.effective_rate) ? `effective annual rate implied by the principal and the maturity value${isNum(x.quoted_rate) ? ` · ${x.quoted_rate}% quoted by the bank (quarterly compounding makes the effective rate a little higher)` : ''}` : ''),
+    row('Value today', open && isNum(s.current_value) ? M(s.current_value) : '', open && isNum(x.accrued) ? `${M(x.accrued)} accrued so far, along the curve from the principal to the maturity value` : ''),
+    row('Interest paid out', s.dividends ? M(s.dividends) : '', 'received so far, outside the deposit'),
+    row('Paid out', !open && s.redeemed ? `${M(s.redeemed)}${f.closed_on ? ` on ${fmtDate(f.closed_on)}` : ''}` : '', isNum(s.realised_gain) ? `${M(s.realised_gain)} more than the principal` : ''),
+  ].join('');
+  return `
+    <section class="card">
+      <div class="card-head"><h2>Deposit details</h2><span class="muted small">from the bank's FD advice: the deposit grows from the principal to the maturity value at a constant rate</span></div>
+      <div class="table-wrap"><table class="data"><tbody>${rows}</tbody></table></div>
+    </section>`;
+}
+
+/** Fixed deposit: date, type, amount and comment; the rupees-as-units bookkeeping stays out of sight. */
+function fdTxnTable(txns, k, cur) {
+  const M = (v, d = 0) => fmtMoney(v, cur, d);
+  const sum = (...types) => txns.filter((t) => types.includes(t.type)).reduce((s, t) => s + t.amount, 0);
+  const body = txns
+    .map((tx) => `
+      <tr data-id="${tx.id}">
+        <td>${fmtDate(tx.date)}</td>
+        <td><span class="chip${CHIP_CLASS[tx.type] || ''}">${k.types[tx.type] || tx.type}</span></td>
+        <td class="num">${M(tx.amount, 2)}</td>
+        <td class="comment-cell">${commentCell(tx.notes)}</td>
+        <td class="row-actions"><button type="button" class="link-btn" data-edit>Edit</button><button type="button" class="link-btn danger-text" data-del>Delete</button></td>
+      </tr>`)
+    .join('');
+  const line = (v, label) => (v ? `${M(v, 2)}<div class="muted small">${label}</div>` : '');
+  return `
+    <div class="table-wrap">
+      <table class="data txn-table">
+        <thead><tr><th>Date</th><th>Type</th><th class="num">Amount (${esc(cur)})</th><th>Comment</th><th></th></tr></thead>
+        <tbody>${body}</tbody>
+        <tfoot><tr><td colspan="2">Total (${txns.length} transaction${txns.length === 1 ? '' : 's'})</td><td class="num">${line(sum('SIP', 'LUMPSUM'), 'deposited')}${line(sum('REDEMPTION'), 'paid out')}${line(sum('DIVIDEND'), 'interest paid out')}</td><td colspan="2"></td></tr></tfoot>
+      </table>
+    </div>`;
+}
+
 /** Sovereign Gold Bond: the bond's terms, the interest schedule and what has been received. */
 function goldCard(f, cur) {
   const g = f.gold || {};
@@ -996,7 +1128,10 @@ async function renderFund(id, folioKey, schemeKey) {
   const epf = k.key === 'EPF';
   const ppf = k.key === 'PPF';
   const gold = k.key === 'GOLD';
+  const fdk = k.key === 'FD'; // fixed deposit: rupees valued along the curve from the principal to the maturity value
+  const ins = k.key === 'INS'; // insurance policy: premiums valued at the policy's own rate towards the maturity value
   const rupee = epf || ppf; // EPF and PPF: a rupee is a unit, interest is entered rather than priced
+  const plain = rupee || fdk || ins; // no price tiles: these kinds have their own
   const cur = f.currency || BASE;
   const foreign = Boolean(f.needs_fx);
   const b = foreign ? f.base : null; // converted figures, when an exchange rate is available
@@ -1016,7 +1151,22 @@ async function renderFund(id, folioKey, schemeKey) {
     : folios.length === 1
       ? `${k.folio} <b>${esc(folios[0].label)}</b>`
       : f.folio_number ? `${k.folio} <b>${esc(f.folio_number)}</b>` : '';
-  const meta = (gold
+  const meta = (ins
+    ? [
+        f.folio_number ? `Policy number <b>${esc(f.folio_number)}</b>` : folioText,
+        d.insurer ? esc(d.insurer) : '',
+        d.plan ? esc(d.plan) : '',
+        f.policy?.premium ? `${M(f.policy.premium)} ${esc(f.policy.frequency || 'yearly')}` : '',
+        fdMaturityText(f.policy),
+      ]
+    : fdk
+    ? [
+        f.folio_number ? `Account number <b>${esc(f.folio_number)}</b>` : folioText,
+        d.bank ? esc(d.bank) : '',
+        f.fd?.deposit_date ? `deposited ${fmtDate(f.fd.deposit_date)}` : '',
+        fdMaturityText(f.fd),
+      ]
+    : gold
     ? [
         folioText,
         d.code ? `Code <b>${esc(d.code)}</b> · <a href="https://www.google.com/finance/quote/${encodeURIComponent(d.code)}:NSE" target="_blank" rel="noopener">Google Finance</a>` : '',
@@ -1080,6 +1230,11 @@ async function renderFund(id, folioKey, schemeKey) {
     ${gold && !isNum(s.latest_nav) ? `<div class="banner warn">This bond has no price yet, so it has no current value. ${d.code ? `Its code <b>${esc(d.code)}</b> could not be priced from the exchange list yet (offline, or the code is not listed): click <b>Refresh prices</b> when online, check the code under Edit gold bond, or ` : 'Set its NSE code under <b>Edit gold bond</b> to price it automatically, or '}click <b>Gold price</b> and enter today's price per gram.</div>` : ''}
     ${gold && f.gold?.price_source === 'manual' && s.latest_nav_date && (Date.now() - new Date(`${s.latest_nav_date}T00:00:00`)) / 864e5 > 30 ? `<div class="banner">The gold price you entered is from ${fmtDate(s.latest_nav_date)}. Update it with <b>Gold price</b>, or set the bond's NSE code so it is priced from the exchange.</div>` : ''}
     ${ppf && f.ppf?.extended_till ? `<div class="banner">This account matured on ${fmtDate(f.ppf.matures_on)}. It is shown as extended in five-year blocks, currently till ${fmtDate(f.ppf.extended_till)}; deposits and interest carry on as before.</div>` : ''}
+    ${fdk && f.fd?.awaiting_payout ? `<div class="banner warn">This deposit matured on ${fmtDate(f.fd.maturity_date)}. Once the bank pays it out, record the payout with <b>Matured / paid out</b> (a renewal is a new deposit); until then it is shown at its maturity value.</div>` : ''}
+    ${fdk && !f.closed && s.units > 0 && !f.fd?.has_terms ? `<div class="banner">The maturity date and value are not set, so the deposit is shown at its principal with no growth. Enter them from the bank's FD advice with <b>Edit fixed deposit</b>, or import the sheet's <i>Final Value at maturity</i> line.</div>` : ''}
+    ${ins && !f.closed && f.policy?.overdue ? `<div class="banner warn">${f.policy.overdue === 1 ? `A premium of ${M(f.policy.premium)} fell due on ${fmtDate(f.policy.next_due)}` : `${f.policy.overdue} premiums (${M(f.policy.premium)} ${esc(f.policy.frequency)}, the first due ${fmtDate(f.policy.next_due)}) fell due`} and ${f.policy.overdue === 1 ? 'has' : 'have'} not been recorded. Record ${f.policy.overdue === 1 ? 'it' : 'them'} with <b>Premium paid</b>, or import the receipts; until then the policy's schedule still counts ${f.policy.overdue === 1 ? 'it' : 'them'} as still to come.</div>` : ''}
+    ${ins && f.policy?.awaiting_payout ? `<div class="banner warn">This policy matured on ${fmtDate(f.policy.maturity_date)}. Once the insurer pays it out, record the payout with <b>Matured / paid out</b>; until then it is shown at its maturity value.</div>` : ''}
+    ${ins && !f.closed && s.units > 0 && !f.policy?.has_terms ? `<div class="banner">The maturity date and value are not set, so the policy is shown at the premiums paid with no growth and no schedule. Enter them from the policy document with <b>Edit policy</b>, or import the sheet's <i>Value at maturity</i> line.</div>` : ''}
     <a class="back-link" href="#/">← Portfolio</a>
     <div class="page-head">
       <div>
@@ -1088,9 +1243,11 @@ async function renderFund(id, folioKey, schemeKey) {
         ${f.notes ? `<div class="notes">${esc(f.notes)}</div>` : ''}
       </div>
       <div class="head-actions">
-        ${!rupee && !f.closed && s.units > 0 ? `<button type="button" class="btn ghost small" id="btn-exit" title="Sell everything you hold${active ? ` in this ${k.folio.toLowerCase()}` : ''}${activeScheme ? ` in scheme ${esc(activeScheme.scheme)}` : ''} and close the position">Exit${activeScheme ? ` scheme ${esc(activeScheme.scheme)}` : ''}</button>` : ''}
+        ${!plain && !f.closed && s.units > 0 ? `<button type="button" class="btn ghost small" id="btn-exit" title="Sell everything you hold${active ? ` in this ${k.folio.toLowerCase()}` : ''}${activeScheme ? ` in scheme ${esc(activeScheme.scheme)}` : ''} and close the position">Exit${activeScheme ? ` scheme ${esc(activeScheme.scheme)}` : ''}</button>` : ''}
         ${epf && !d.transferred_to && f.transactions.length ? '<button type="button" class="btn ghost small" id="btn-epf-transfer" title="Changed jobs? Move the balance and its history to a new account under the same UAN">Moved jobs</button>' : ''}
         ${gold ? '<button type="button" class="btn ghost small" id="btn-gold-price" title="Enter today\'s gold price per gram; it values every gold bond">Gold price</button>' : ''}
+        ${ins && !f.closed && (f.policy?.premium || f.policy?.next_due) ? '<button type="button" class="btn ghost small" id="btn-ins-premium" title="Record the premium that fell due (date and amount pre-filled from the schedule)">Premium paid</button>' : ''}
+        ${(fdk || ins) && !f.closed && s.units > 0 ? `<button type="button" class="btn ghost small" id="btn-fd-payout" title="Record the maturity payout or ${ins ? 'a surrender' : 'a premature closure'}; the ${k.lower} then moves to Closed">Matured / paid out</button>` : ''}
         <button type="button" class="btn ghost small" id="btn-edit-fund">Edit ${k.lower}</button>
         <button type="button" class="btn ghost small danger-text" id="btn-delete-fund">Delete</button>
       </div>
@@ -1102,17 +1259,17 @@ async function renderFund(id, folioKey, schemeKey) {
         realised: rupee ? 0 : s.realised_gain, dividends: s.dividends, currency: cur, realisedWhat: k.realisedWhat || 'from sales', dividendWord: k.dividendWord || 'dividends',
         approx: b ? `≈ ${fmtINR(bs.current_value)} · 1 ${esc(cur)} = ${fmtINR(b.rate, 2)} on ${fmtDate(b.rate_date)}` : '',
       })}
-      <div class="tiles">${epf ? epfTiles(s, activeScheme, M, f) : ppf ? ppfTiles(s, M, f) : ''}
-        ${rupee ? '' : tile(s.redeemed ? 'Investment in holdings' : 'Total investment', M(s.invested), [s.redeemed ? `${M(s.purchased)} ${nps ? 'contributed' : 'bought'} · ${M(s.redeemed)} ${k.sold}` : '', s.charges ? `${M(s.charges)} deducted as charges` : '', netOfDividends(s, M, k.dividendWord), s.bonus_units ? `${fmtNum(s.bonus_units, 4)} bonus ${k.unit} at no cost` : '', inBase(bs?.invested)].filter(Boolean).join(' · '))}
-        ${rupee ? '' : tile(s.redeemed || s.dividends ? 'Unrealised profit' : 'Total profit', deltaValue(s.invested ? s.profit : null, cur), [isNum(s.abs_return_pct) ? `${fmtPct(s.abs_return_pct)} absolute` : '', realisedText(s, M, k.realisedWhat || 'from sales', k.dividendWord), b && s.invested ? `${inBase(bs.profit)} in ${esc(BASE)}` : ''].filter(Boolean).join(' · '))}
-        ${rupee ? '' : tile('XIRR', fmtPct(pct(s.xirr)), b ? `annualised in ${esc(cur)} · ${fmtPct(pct(bs.xirr))} in ${esc(BASE)}` : nps ? (activeScheme ? `annualised, scheme ${esc(activeScheme.scheme)} on its own` : 'annualised, whole account, on your own contributions') : 'annualised')}
-        ${rupee ? '' : nps && !activeScheme
+      <div class="tiles">${epf ? epfTiles(s, activeScheme, M, f) : ppf ? ppfTiles(s, M, f) : fdk ? fdTiles(s, M, f) : ins ? insTiles(s, M, f) : ''}
+        ${plain ? '' : tile(s.redeemed ? 'Investment in holdings' : 'Total investment', M(s.invested), [s.redeemed ? `${M(s.purchased)} ${nps ? 'contributed' : 'bought'} · ${M(s.redeemed)} ${k.sold}` : '', s.charges ? `${M(s.charges)} deducted as charges` : '', netOfDividends(s, M, k.dividendWord), s.bonus_units ? `${fmtNum(s.bonus_units, 4)} bonus ${k.unit} at no cost` : '', inBase(bs?.invested)].filter(Boolean).join(' · '))}
+        ${plain ? '' : tile(s.redeemed || s.dividends ? 'Unrealised profit' : 'Total profit', deltaValue(s.invested ? s.profit : null, cur), [isNum(s.abs_return_pct) ? `${fmtPct(s.abs_return_pct)} absolute` : '', realisedText(s, M, k.realisedWhat || 'from sales', k.dividendWord), b && s.invested ? `${inBase(bs.profit)} in ${esc(BASE)}` : ''].filter(Boolean).join(' · '))}
+        ${plain ? '' : tile('XIRR', fmtPct(pct(s.xirr)), b ? `annualised in ${esc(cur)} · ${fmtPct(pct(bs.xirr))} in ${esc(BASE)}` : nps ? (activeScheme ? `annualised, scheme ${esc(activeScheme.scheme)} on its own` : 'annualised, whole account, on your own contributions') : 'annualised')}
+        ${plain ? '' : nps && !activeScheme
           ? tile('Latest NAVs', schemes.map((p) => `<span class="scheme-nav"><span class="chip">${esc(p.scheme)}</span>${isNum(p.summary.latest_nav) ? fmtNum(p.summary.latest_nav, 2) : '–'}</span>`).join(''), s.latest_nav_date ? `as of ${fmtDate(s.latest_nav_date)} · ${schemes.length} scheme${schemes.length === 1 ? '' : 's'}` : 'NAVs not fetched yet')
           : tile(`Latest ${k.price}`, isNum(s.latest_nav) ? M(s.latest_nav, k.priceDecimals) : '–', s.latest_nav_date ? `as of ${fmtDate(s.latest_nav_date)}${gold ? (f.gold?.price_source === 'sgb' ? ' · NSE traded price' : ' · entered by you') : ''} · ${fmtNum(s.units, 3)} ${k.unit} held` : gold ? 'no price yet' : `${k.price} not fetched yet`)}
       </div>
     </section>
     ${nps ? schemeTable(f, schemeKey, cur) : epf ? epfYearTable(f, cur) : ppf ? ppfYearTable(f, cur) : folioTable(f, folioKey, k, cur)}
-    ${gold ? goldCard(f, cur) : ''}
+    ${gold ? goldCard(f, cur) : fdk ? fdCard(f, cur) : ins ? insCard(f, cur) : ''}
     ${(epf && f.epf?.years?.length) || (ppf && f.ppf?.years?.length) ? `<section class="card chart-card">
       <div class="card-head"><h2>Deposits and interest by year${scope}</h2><span class="muted small">one column per financial year: ${epf ? 'employee deposits, employer deposits' : 'deposits'} and the interest credited for that year</span></div>
       <div class="chart-wrap short"><canvas id="year-chart" role="img" aria-label="${epf ? 'Employee deposits, employer deposits' : 'Deposits'} and interest credited per financial year for ${esc(f.name)}${activeScheme ? `, ${esc(activeScheme.name)}` : ''}"></canvas></div>
@@ -1130,10 +1287,10 @@ async function renderFund(id, folioKey, schemeKey) {
         </div>
       </div>
       ${f.transactions.length
-        ? txnTable(f.transactions, k, cur, { showScheme: nps, epf: rupee })
+        ? (fdk || ins ? fdTxnTable(f.transactions, k, cur) : txnTable(f.transactions, k, cur, { showScheme: nps, epf: rupee }))
         : active || activeScheme
           ? `<p class="empty">No ${rupee ? 'entries' : 'transactions'} in this ${activeScheme ? (epf ? 'share' : 'scheme') : k.folio.toLowerCase()}.</p>`
-          : `<p class="empty">No ${rupee ? 'entries' : 'transactions'} yet. ${epf ? 'Paste a financial year from your sheet with Import a year, or add months one at a time; enter each year\'s interest when EPFO credits it' : ppf ? 'Paste a financial year from your sheet with Import a year, or add deposits one at a time; enter each year\'s interest when it is credited' : nps ? 'Add contributions one at a time, or paste your eNPS transaction statement with Import (one row per contribution, with units and NAV per scheme)' : stock ? 'Add purchases and sales one at a time, or use Import to paste a whole table' : 'Add SIP installments, lumpsum purchases or redemptions one at a time, or use Import to paste a whole table'}.</p>`}
+          : `<p class="empty">No ${rupee ? 'entries' : 'transactions'} yet. ${epf ? 'Paste a financial year from your sheet with Import a year, or add months one at a time; enter each year\'s interest when EPFO credits it' : ppf ? 'Paste a financial year from your sheet with Import a year, or add deposits one at a time; enter each year\'s interest when it is credited' : fdk ? 'Record the deposit with + Add transaction, or paste the bank sheet (the deposit row and the Final Value at maturity line) with Import' : ins ? 'Record the premiums paid with Premium paid, or paste the premium sheet (paid and future premiums, and the Value at maturity line) with Import' : nps ? 'Add contributions one at a time, or paste your eNPS transaction statement with Import (one row per contribution, with units and NAV per scheme)' : stock ? 'Add purchases and sales one at a time, or use Import to paste a whole table' : 'Add SIP installments, lumpsum purchases or redemptions one at a time, or use Import to paste a whole table'}.</p>`}
     </section>`;
 
   mountChart(f.history, cur);
@@ -1156,6 +1313,19 @@ async function renderFund(id, folioKey, schemeKey) {
   document.getElementById('btn-epf-interest')?.addEventListener('click', () => openEpfInterestModal(fundForForms));
   document.getElementById('btn-epf-transfer')?.addEventListener('click', () => openEpfTransferModal(f));
   document.getElementById('btn-gold-price')?.addEventListener('click', () => openGoldPriceModal());
+  document.getElementById('btn-fd-payout')?.addEventListener('click', () => {
+    const x = f.fd || f.policy || {};
+    openFdTxnModal(fundForForms, null, {
+      type: 'REDEMPTION', payout: true,
+      date: x.matured && x.maturity_date <= todayISO() ? x.maturity_date : todayISO(),
+      amount: x.matured && isNum(x.maturity_value) ? x.maturity_value : s.current_value,
+    });
+  });
+  document.getElementById('btn-ins-premium')?.addEventListener('click', () => openFdTxnModal(fundForForms, null, {
+    type: 'SIP', premium: true,
+    date: f.policy?.next_due && f.policy.next_due <= todayISO() ? f.policy.next_due : todayISO(),
+    amount: f.policy?.premium || null,
+  }));
   document.getElementById('btn-exit')?.addEventListener('click', () => openTxnModal(fundForForms, null, { exitUnits: s.units, folios: folios.length, scoped: Boolean(active), scheme: activeScheme?.scheme || '' }));
   document.getElementById('btn-import-txn').addEventListener('click', () => openImportModal(fundForForms, render));
   document.getElementById('btn-edit-fund').addEventListener('click', () => openFundModal(f));
@@ -1221,6 +1391,8 @@ function fundFormHtml(f) {
   const epf = k.key === 'EPF';
   const ppf = k.key === 'PPF';
   const gold = k.key === 'GOLD';
+  const fdKind = k.key === 'FD';
+  const insKind = k.key === 'INS';
   const d = f.details || {};
   const txnCount = f.summary?.txn_count ?? 0;
   const schemeName = f.scheme?.scheme_name || (f.scheme_code ? `Scheme code ${f.scheme_code}` : '');
@@ -1238,6 +1410,8 @@ function fundFormHtml(f) {
         <label><input type="radio" name="kind" value="EPF"> EPF</label>
         <label><input type="radio" name="kind" value="PPF"> PPF</label>
         <label><input type="radio" name="kind" value="GOLD"> Gold (SGB)</label>
+        <label><input type="radio" name="kind" value="FD"> Fixed deposit</label>
+        <label><input type="radio" name="kind" value="INS"> Insurance policy (LIC)</label>
       </div>
     </div>`}
     <div id="mf-fields" ${k.key !== 'MF' ? 'hidden' : ''}>
@@ -1338,6 +1512,87 @@ function fundFormHtml(f) {
         <span class="hint">From the RBI press release or your allotment advice. It sets the interest dates, early redemption from the fifth year (filled into Locked until) and maturity after eight years. Leave empty to take the first purchase's date.</span>
       </label>
     </div>
+    <div id="ins-fields" ${insKind ? '' : 'hidden'}>
+      <div class="form-row">
+        <label class="field">Insurer
+          <input name="ins_insurer" value="${esc(d.insurer ?? (editing ? '' : 'LIC'))}" placeholder="e.g. LIC">
+          <span class="hint">A life insurance policy with a maturity value (an endowment or money-back plan): premiums on a schedule, a payout known in advance. Nothing is looked up online.</span>
+        </label>
+        <label class="field">Plan (optional)
+          <input name="ins_plan" value="${esc(d.plan ?? '')}" placeholder="e.g. Jeevan Anand (149)">
+        </label>
+      </div>
+      <div class="form-row">
+        <label class="field">Premium (₹)
+          <input type="number" name="ins_premium" min="0" step="0.01" value="${d.premium ?? ''}" placeholder="e.g. 10000">
+          <span class="hint">The amount of each premium, as paid (with any GST).</span>
+        </label>
+        <label class="field">Paid
+          <select name="ins_frequency">${['yearly', 'half-yearly', 'quarterly', 'monthly'].map((v) => `<option value="${v}" ${(d.frequency || 'yearly') === v ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select>
+        </label>
+      </div>
+      <div class="form-row">
+        <label class="field">First premium
+          <input type="date" name="ins_first_premium" value="${esc(d.first_premium ?? '')}">
+          <span class="hint">The policy's start date; every due date follows from it. Leave empty to take the first premium recorded.</span>
+        </label>
+        <label class="field">Last premium (optional)
+          <input type="date" name="ins_last_premium" value="${esc(d.last_premium ?? '')}">
+          <span class="hint">Leave empty when premiums run until maturity (the last due date before it).</span>
+        </label>
+      </div>
+      <div class="form-row">
+        <label class="field">Maturity date
+          <input type="date" name="ins_maturity_date" value="${esc(d.maturity_date ?? '')}">
+          <span class="hint">Filled into Locked until.</span>
+        </label>
+        <label class="field">Maturity value (₹)
+          <input type="number" name="ins_maturity_value" min="0" step="0.01" value="${d.maturity_value ?? ''}" placeholder="e.g. 400000">
+          <span class="hint">Sum assured plus the bonuses you expect, from the policy document or the insurer's estimate. The policy is valued along the curve from the premiums to it.</span>
+        </label>
+      </div>
+      <label class="field">Sum assured (₹, optional)
+        <input type="number" name="ins_sum_assured" min="0" step="0.01" value="${d.sum_assured ?? ''}" placeholder="e.g. 250000">
+        <span class="hint">The life cover, for your records.</span>
+      </label>
+      ${editing ? '' : `
+      <label class="check"><input type="checkbox" name="ins_backfill" checked> <span>Record every premium due up to today as paid (one Premium per due date from the first premium). Untick to import them from a sheet instead.</span></label>`}
+    </div>
+    <div id="fd-fields" ${fdKind ? '' : 'hidden'}>
+      <label class="field">Bank (optional)
+        <input name="fd_bank" value="${esc(d.bank ?? '')}" placeholder="e.g. SBI, HDFC Bank, Post Office">
+        <span class="hint">A fixed deposit is one holding: the principal, and the maturity date and value from the bank's FD advice. Between the two dates it is valued along a constant-rate curve from the principal to the maturity value; nothing is looked up online.</span>
+      </label>
+      ${editing ? '' : `
+      <div class="form-row">
+        <label class="field">Deposit date
+          <input type="date" name="fd_deposit_date">
+        </label>
+        <label class="field">Principal (₹)
+          <input type="number" name="fd_principal" min="0" step="0.01" placeholder="e.g. 100000">
+          <span class="hint">Recorded as the deposit transaction. Leave both empty to import the deposit from a sheet instead.</span>
+        </label>
+      </div>`}
+      <div class="form-row">
+        <label class="field">Maturity date
+          <input type="date" name="fd_maturity_date" value="${esc(d.maturity_date ?? '')}">
+          <span class="hint">From the FD advice; filled into Locked until.</span>
+        </label>
+        <label class="field">Maturity value (₹)
+          <input type="number" name="fd_maturity_value" min="0" step="0.01" value="${d.maturity_value ?? ''}" placeholder="e.g. 107250">
+          <span class="hint">What the bank will pay at maturity. For a deposit whose interest is paid out, usually the principal.</span>
+        </label>
+      </div>
+      <div class="form-row">
+        <label class="field">Interest rate % (optional)
+          <input type="number" name="fd_rate" min="0" max="100" step="0.01" value="${d.rate ?? ''}" placeholder="e.g. 7.25">
+          <span class="hint">The quoted rate, for your records; the effective rate is worked out from the two values.</span>
+        </label>
+        <label class="field">Interest
+          <select name="fd_payout"><option value="cumulative" ${d.payout === 'periodic' ? '' : 'selected'}>Cumulative (paid with the principal at maturity)</option><option value="periodic" ${d.payout === 'periodic' ? 'selected' : ''}>Paid out periodically</option></select>
+        </label>
+      </div>
+    </div>
     <div id="ppf-fields" ${ppf ? '' : 'hidden'}>
       <div class="form-row">
         <label class="field">Bank / post office (optional)
@@ -1351,9 +1606,9 @@ function fundFormHtml(f) {
       </div>
     </div>
     <div class="form-row">
-      <label class="field"><span id="folio-label">${gold ? 'Default folio (optional)' : ppf ? 'Account number' : epf ? 'UAN' : nps ? 'PRAN' : stock ? 'Default account (optional)' : 'Default folio number'}</span>
-        <input name="folio_number" value="${esc(f.folio_number ?? '')}" placeholder="${gold ? 'e.g. 87654321' : ppf ? 'e.g. 12345678901' : epf ? 'e.g. 100123456789' : nps ? 'e.g. 110012345678' : stock ? 'e.g. Zerodha, ESPP, demat no.' : 'e.g. 1234567/89'}">
-        <span class="hint" id="folio-hint">${gold ? 'The folio or demat account on your allotment advice; each purchase can carry its own.' : ppf ? 'Your PPF account number (optional).' : epf ? 'Your Universal Account Number (optional).' : nps ? 'Your Permanent Retirement Account Number (optional).' : stock ? 'Broker or demat account; each transaction can carry its own.' : 'Pre-filled on new transactions; each transaction can still carry its own folio.'}</span>
+      <label class="field"><span id="folio-label">${insKind ? 'Policy number' : fdKind ? 'FD account number' : gold ? 'Default folio (optional)' : ppf ? 'Account number' : epf ? 'UAN' : nps ? 'PRAN' : stock ? 'Default account (optional)' : 'Default folio number'}</span>
+        <input name="folio_number" value="${esc(f.folio_number ?? '')}" placeholder="${insKind ? 'e.g. 123456789' : fdKind ? 'e.g. 50012345678' : gold ? 'e.g. 87654321' : ppf ? 'e.g. 12345678901' : epf ? 'e.g. 100123456789' : nps ? 'e.g. 110012345678' : stock ? 'e.g. Zerodha, ESPP, demat no.' : 'e.g. 1234567/89'}">
+        <span class="hint" id="folio-hint">${insKind ? 'The policy number on the bond or the premium receipts (optional).' : fdKind ? 'The FD account or receipt number on the bank\'s advice (optional).' : gold ? 'The folio or demat account on your allotment advice; each purchase can carry its own.' : ppf ? 'Your PPF account number (optional).' : epf ? 'Your Universal Account Number (optional).' : nps ? 'Your Permanent Retirement Account Number (optional).' : stock ? 'Broker or demat account; each transaction can carry its own.' : 'Pre-filled on new transactions; each transaction can still carry its own folio.'}</span>
       </label>
       <label class="field">Display name
         <input name="name" required value="${esc(f.name ?? '')}" placeholder="Shown in your portfolio">
@@ -1479,15 +1734,19 @@ async function openFundModal(existing) {
     const epfKind = kind === 'EPF';
     const ppfKind = kind === 'PPF';
     const goldKind = kind === 'GOLD';
+    const fdK = kind === 'FD';
+    const insK = kind === 'INS';
     modal.querySelector('#mf-fields').hidden = kind !== 'MF';
+    modal.querySelector('#fd-fields').hidden = !fdK;
+    modal.querySelector('#ins-fields').hidden = !insK;
     modal.querySelector('#ppf-fields').hidden = !ppfKind;
     modal.querySelector('#gold-fields').hidden = !goldKind;
     modal.querySelector('#stock-fields').hidden = !stock;
     modal.querySelector('#nps-fields').hidden = !npsKind;
     modal.querySelector('#epf-fields').hidden = !epfKind;
-    modal.querySelector('#folio-label').textContent = goldKind ? 'Default folio (optional)' : ppfKind ? 'Account number' : epfKind ? 'UAN' : npsKind ? 'PRAN' : stock ? 'Default account (optional)' : 'Default folio number';
-    modal.querySelector('#folio-hint').textContent = goldKind ? 'The folio or demat account on your allotment advice; each purchase can carry its own.' : ppfKind ? 'Your PPF account number (optional).' : epfKind ? 'Your Universal Account Number (optional).' : npsKind ? 'Your Permanent Retirement Account Number (optional).' : stock ? 'Broker or demat account; each transaction can carry its own.' : 'Pre-filled on new transactions; each transaction can still carry its own folio.';
-    folioInput.placeholder = goldKind ? 'e.g. 87654321' : ppfKind ? 'e.g. 12345678901' : epfKind ? 'e.g. 100123456789' : npsKind ? 'e.g. 110012345678' : stock ? 'e.g. Zerodha, ESPP, demat no.' : 'e.g. 1234567/89';
+    modal.querySelector('#folio-label').textContent = insK ? 'Policy number' : fdK ? 'FD account number' : goldKind ? 'Default folio (optional)' : ppfKind ? 'Account number' : epfKind ? 'UAN' : npsKind ? 'PRAN' : stock ? 'Default account (optional)' : 'Default folio number';
+    modal.querySelector('#folio-hint').textContent = insK ? 'The policy number on the bond or the premium receipts (optional).' : fdK ? 'The FD account or receipt number on the bank\'s advice (optional).' : goldKind ? 'The folio or demat account on your allotment advice; each purchase can carry its own.' : ppfKind ? 'Your PPF account number (optional).' : epfKind ? 'Your Universal Account Number (optional).' : npsKind ? 'Your Permanent Retirement Account Number (optional).' : stock ? 'Broker or demat account; each transaction can carry its own.' : 'Pre-filled on new transactions; each transaction can still carry its own folio.';
+    folioInput.placeholder = insK ? 'e.g. 123456789' : fdK ? 'e.g. 50012345678' : goldKind ? 'e.g. 87654321' : ppfKind ? 'e.g. 12345678901' : epfKind ? 'e.g. 100123456789' : npsKind ? 'e.g. 110012345678' : stock ? 'e.g. Zerodha, ESPP, demat no.' : 'e.g. 1234567/89';
     if (npsKind) {
       loadNps();
       if (!editing) { form.elements.locked.value = tierSel.value === 'I' ? '1' : '0'; modal.querySelector('#lock-until-field').hidden = tierSel.value !== 'I'; }
@@ -1498,6 +1757,12 @@ async function openFundModal(existing) {
       if (!editing) { form.elements.locked.value = '1'; modal.querySelector('#lock-until-field').hidden = false; if (!nameEdited) nameInput.value = 'Sovereign Gold Bond'; }
       loadSgb();
       form.elements.gold_pick.focus();
+    } else if (fdK) {
+      if (!editing) { form.elements.locked.value = '1'; modal.querySelector('#lock-until-field').hidden = false; if (!nameEdited) nameInput.value = 'Fixed deposit'; }
+      form.elements.fd_bank.focus();
+    } else if (insK) {
+      if (!editing) { form.elements.locked.value = '1'; modal.querySelector('#lock-until-field').hidden = false; if (!nameEdited) nameInput.value = insName(); }
+      form.elements.ins_plan.focus();
     } else if (ppfKind) {
       if (!editing) { form.elements.locked.value = '1'; modal.querySelector('#lock-until-field').hidden = false; if (!nameEdited) nameInput.value = 'PPF'; }
       form.elements.ppf_bank.focus();
@@ -1505,10 +1770,16 @@ async function openFundModal(existing) {
   };
   form.elements.epf_employer.addEventListener('input', () => { if (kind === 'EPF' && !editing && !nameEdited) nameInput.value = `EPF${form.elements.epf_employer.value.trim() ? ` · ${form.elements.epf_employer.value.trim()}` : ''}`; });
   form.elements.ppf_bank.addEventListener('input', () => { if (kind === 'PPF' && !editing && !nameEdited) nameInput.value = `PPF${form.elements.ppf_bank.value.trim() ? ` · ${form.elements.ppf_bank.value.trim()}` : ''}`; });
+  form.elements.fd_bank.addEventListener('input', () => { if (kind === 'FD' && !editing && !nameEdited) nameInput.value = `FD${form.elements.fd_bank.value.trim() ? ` · ${form.elements.fd_bank.value.trim()}` : ''}`; });
+  const insName = () => { const i = form.elements.ins_insurer.value.trim(); const p = form.elements.ins_plan.value.trim(); return `${i || 'Policy'}${p ? ` · ${p}` : i ? ' policy' : ''}`; };
+  ['ins_insurer', 'ins_plan'].forEach((n) => form.elements[n].addEventListener('input', () => { if (kind === 'INS' && !editing && !nameEdited) nameInput.value = insName(); }));
   // PPF: the opening date fills "Locked until" with the maturity, unless a date was typed by hand
   let lockAuto = !form.elements.lock_in_until.value;
   form.elements.lock_in_until.addEventListener('input', () => { lockAuto = !form.elements.lock_in_until.value; });
   form.elements.ppf_opened.addEventListener('change', () => { if (kind === 'PPF' && lockAuto && form.elements.ppf_opened.value) form.elements.lock_in_until.value = ppfMaturityDate(form.elements.ppf_opened.value); });
+  // Fixed deposit: the maturity date is the lock-in, unless a date was typed by hand
+  form.elements.fd_maturity_date.addEventListener('change', () => { if (kind === 'FD' && lockAuto && form.elements.fd_maturity_date.value) form.elements.lock_in_until.value = form.elements.fd_maturity_date.value; });
+  form.elements.ins_maturity_date.addEventListener('change', () => { if (kind === 'INS' && lockAuto && form.elements.ins_maturity_date.value) form.elements.lock_in_until.value = form.elements.ins_maturity_date.value; });
   form.elements.gold_series.addEventListener('input', () => { if (kind === 'GOLD' && !editing && !nameEdited) nameInput.value = form.elements.gold_series.value.trim() || 'Sovereign Gold Bond'; });
   // ---- gold bond: the series list from the exchange (sgb.vercel.app)
   const goldPick = form.elements.gold_pick;
@@ -1766,6 +2037,56 @@ async function openFundModal(existing) {
       };
       if (!body.name) body.name = body.details.series || 'Sovereign Gold Bond';
     }
+    let fdDeposit = null;
+    if (kind === 'FD') {
+      const md = String(fd.get('fd_maturity_date') || '') || null;
+      body.details = {
+        bank: String(fd.get('fd_bank') || '').trim(),
+        maturity_date: md,
+        maturity_value: fd.get('fd_maturity_value') ? Number(fd.get('fd_maturity_value')) : null,
+        rate: fd.get('fd_rate') ? Number(fd.get('fd_rate')) : null,
+        payout: String(fd.get('fd_payout') || 'cumulative'),
+      };
+      if (!editing) {
+        const dd = String(fd.get('fd_deposit_date') || '');
+        const principal = Number(fd.get('fd_principal')) || 0;
+        if ((dd && !principal) || (!dd && principal)) { err.textContent = 'Enter both the deposit date and the principal, or leave both empty to import the deposit later.'; err.hidden = false; return; }
+        if (dd && md && md <= dd) { err.textContent = 'The maturity date must be after the deposit date.'; err.hidden = false; return; }
+        if (dd && principal) fdDeposit = { date: dd, folio_number: body.folio_number, scheme: '', type: 'LUMPSUM', amount: principal, units: principal, nav: 1, notes: '' };
+      }
+      if (!body.name) body.name = `FD${body.details.bank ? ` · ${body.details.bank}` : ''}`;
+    }
+    let insPremiums = null;
+    if (kind === 'INS') {
+      const num = (n) => (fd.get(n) ? Number(fd.get(n)) : null);
+      const str = (n) => String(fd.get(n) || '') || null;
+      body.details = {
+        insurer: String(fd.get('ins_insurer') || '').trim(),
+        plan: String(fd.get('ins_plan') || '').trim(),
+        premium: num('ins_premium'),
+        frequency: String(fd.get('ins_frequency') || 'yearly'),
+        first_premium: str('ins_first_premium'),
+        last_premium: str('ins_last_premium'),
+        maturity_date: str('ins_maturity_date'),
+        maturity_value: num('ins_maturity_value'),
+        sum_assured: num('ins_sum_assured'),
+      };
+      const t = body.details;
+      if (t.first_premium && t.maturity_date && t.maturity_date <= t.first_premium) { err.textContent = 'The maturity date must be after the first premium.'; err.hidden = false; return; }
+      if (t.first_premium && t.last_premium && t.last_premium < t.first_premium) { err.textContent = 'The last premium cannot be before the first.'; err.hidden = false; return; }
+      if (!editing && form.elements.ins_backfill.checked && t.premium && t.first_premium) {
+        const today = todayISO();
+        const end = [t.last_premium, t.maturity_date, today].filter(Boolean).sort()[0];
+        insPremiums = [];
+        for (let n = 0; n < 2400; n++) {
+          const due = addMonths(t.first_premium, n * FREQ_MONTHS[t.frequency]);
+          if (due > end) break;
+          insPremiums.push({ date: due, folio_number: body.folio_number, scheme: '', type: 'SIP', amount: t.premium, units: t.premium, nav: 1, notes: '' });
+        }
+        if (!insPremiums.length) insPremiums = null;
+      }
+      if (!body.name) body.name = insName();
+    }
     if (!body.name) body.name = stock ? stockInfo?.name || body.symbol : selected.name || '';
     if (!body.name) {
       err.textContent = 'Give it a display name.';
@@ -1776,8 +2097,16 @@ async function openFundModal(existing) {
     btn.disabled = true;
     try {
       const saved = editing ? await api.put(`/api/funds/${existing.id}`, body) : await api.post('/api/funds', body);
+      let depositError = null;
+      if (fdDeposit && saved?.id) {
+        try { await api.post(`/api/funds/${saved.id}/transactions`, fdDeposit); } catch (e3) { depositError = e3.message; }
+      }
+      if (insPremiums && saved?.id) {
+        try { await api.post(`/api/funds/${saved.id}/transactions/bulk`, { transactions: insPremiums }); } catch (e3) { depositError = e3.message; }
+      }
       closeModal();
-      if (saved.nav_error) toast(`Saved, but prices could not be fetched: ${saved.nav_error}`, 'warn');
+      if (depositError) toast(`${KINDS[kind].label} added, but the ${insPremiums ? 'premiums' : 'deposit'} could not be recorded: ${depositError}. Add ${insPremiums ? 'them' : 'it'} with + Add transaction.`, 'warn');
+      else if (saved.nav_error) toast(`Saved, but prices could not be fetched: ${saved.nav_error}`, 'warn');
       else if (editing) {
         const bits = [`${KINDS[kind].label} updated`];
         if (npsKind ? JSON.stringify(body.details.schemes) !== JSON.stringify(existingDetails?.schemes || {}) : stock ? body.symbol !== original.symbol : body.scheme_code !== original.code) bits.push(npsKind ? 'schemes changed' : stock ? 're-linked to the new symbol' : 're-linked to the new scheme');
@@ -1978,6 +2307,94 @@ function openEpfGroupModal(fund, { entries = [], date, type } = {}) {
   });
 }
 
+/** Fixed deposit or insurance policy: one dialog for a deposit / premium, interest or a benefit paid out, or the payout
+ * at maturity / closure / surrender. The rupee-as-unit bookkeeping is done here: money put in is rupees at 1, money
+ * paid out along the way is cash with no units, and a payout takes every rupee still held at the amount received
+ * (the server works the factor out). */
+function openFdTxnModal(fund, existing, seed) {
+  const ins = fund.kind === 'INS';
+  const cur = fund.currency || BASE;
+  const today = todayISO();
+  const editing = Boolean(existing?.id);
+  const t0 = existing?.type || seed?.type || (ins ? 'SIP' : 'LUMPSUM');
+  const d0 = existing?.date || seed?.date || today;
+  const a0 = existing ? existing.amount : isNum(seed?.amount) ? Number(seed.amount).toFixed(2) : '';
+  const opt = (v, l) => `<option value="${v}" ${t0 === v ? 'selected' : ''}>${l}</option>`;
+  const typeOpts = ins
+    ? opt('SIP', 'Premium') + opt('LUMPSUM', 'Single premium / top-up') + opt('DIVIDEND', 'Benefit received (survival benefit, bonus paid out)') + opt('REDEMPTION', 'Payout (maturity or surrender)')
+    : opt('LUMPSUM', 'Deposit') + opt('DIVIDEND', 'Interest paid out') + opt('REDEMPTION', 'Payout (maturity or premature closure)');
+  const x = fund.fd || fund.policy || {};
+  const title = editing ? 'Edit transaction' : seed?.payout ? `Matured / paid out · ${esc(fund.name)}` : seed?.premium ? `Premium paid · ${esc(fund.name)}` : `Add transaction · ${esc(fund.name)}`;
+  const modal = openModal(title, `
+  <form id="txn-form" class="form" novalidate>
+    ${seed?.payout ? `<div class="banner small">Records the money the ${ins ? 'insurer' : 'bank'} paid out and closes the ${ins ? 'policy' : 'deposit'}; the gain over ${ins ? 'the premiums paid' : 'the principal'} is the ${ins ? 'return' : 'interest'} earned. ${isNum(x.maturity_value) && x.matured ? `The maturity value ${ins ? 'you entered' : 'from the FD advice'} is pre-filled; change it to the amount actually credited${ins ? '' : ' (after any tax deducted at source)'}.` : 'Enter the amount actually credited.'}</div>` : ''}
+    ${seed?.premium ? '<div class="banner small">The next premium from the schedule is pre-filled. Change the date to the day it was actually paid.</div>' : ''}
+    <div class="form-row">
+      <label class="field">Date
+        <input type="date" name="date" required value="${d0}" max="${today}">
+      </label>
+      <label class="field">Type
+        <select name="type">${typeOpts}</select>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">Amount (${esc(cur)})
+        <input type="number" name="amount" min="0" step="0.01" value="${a0}" placeholder="e.g. 100000">
+        <span class="hint" id="amount-hint"></span>
+      </label>
+      <label class="field">${ins ? 'Policy number' : 'Account number'}
+        <input name="folio_number" value="${esc(existing?.folio_number ?? fund.folio_number ?? '')}" placeholder="Optional">
+      </label>
+    </div>
+    <label class="field">Comment
+      <input name="notes" value="${esc(existing?.notes ?? '')}" maxlength="500" placeholder="Optional${ins ? '' : ', e.g. renewed from the earlier deposit'}">
+    </label>
+    <div class="form-error" id="txn-form-error" hidden></div>
+    <div class="form-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">${editing ? 'Save changes' : seed?.payout ? 'Record payout' : seed?.premium ? 'Record premium' : 'Add transaction'}</button>
+    </div>
+  </form>`);
+  const form = modal.querySelector('#txn-form');
+  const typeSel = form.elements.type;
+  const amountHint = modal.querySelector('#amount-hint');
+  const applyType = () => {
+    const t = typeSel.value;
+    amountHint.textContent = ins
+      ? (t === 'DIVIDEND' ? 'Money the policy paid you along the way (a survival benefit or a bonus paid out); the policy carries on.' : t === 'REDEMPTION' ? 'Everything the insurer paid out: the whole policy leaves the holding and it is marked Closed.' : 'The premium as paid, with any GST.')
+      : (t === 'DIVIDEND' ? 'Interest credited to your bank account; the deposit itself is unchanged.' : t === 'REDEMPTION' ? 'Everything the bank paid out: the whole deposit leaves the holding and it is marked Closed.' : 'The principal placed with the bank (a renewal is a new deposit).');
+  };
+  typeSel.addEventListener('change', applyType);
+  applyType();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = modal.querySelector('#txn-form-error');
+    err.hidden = true;
+    const fail = (msg) => { err.textContent = msg; err.hidden = false; };
+    const d = form.elements.date.value;
+    const t = typeSel.value;
+    const amount = parseFloat(form.elements.amount.value) || 0;
+    if (!d) return fail('A date is required.');
+    if (!(amount > 0)) return fail('Enter the amount.');
+    const body = {
+      date: d, folio_number: form.elements.folio_number.value.trim(), scheme: '', type: t, amount, notes: form.elements.notes.value.trim(),
+      units: t === 'DIVIDEND' ? 0 : t === 'LUMPSUM' || t === 'SIP' ? amount : null, nav: t === 'LUMPSUM' || t === 'SIP' ? 1 : null,
+    };
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      if (editing) await api.put(`/api/transactions/${existing.id}`, body);
+      else await api.post(`/api/funds/${fund.id}/transactions`, body);
+      closeModal();
+      toast(editing ? 'Transaction updated' : t === 'REDEMPTION' ? `Payout recorded · the ${ins ? 'policy' : 'deposit'} is closed` : seed?.premium ? 'Premium recorded' : 'Transaction added');
+      render();
+    } catch (e2) {
+      fail(e2.message);
+      btn.disabled = false;
+    }
+  });
+}
+
 /** EPF: a job change. The new employer's account is created under the same UAN and every employee / employer
  * share entry moves to it; the pension (EPS) record stays with the old account unless asked otherwise. */
 function openEpfTransferModal(fund) {
@@ -2099,6 +2516,7 @@ function openEpfInterestModal(fund) {
 function openTxnModal(fund, existing, opts = {}) {
   const k = kindOf(fund);
   if (k.key === 'EPF' || k.key === 'PPF') return openEpfGroupModal(fund, existing ? { entries: [existing] } : {});
+  if (k.key === 'FD' || k.key === 'INS') return openFdTxnModal(fund, existing, null);
   const stock = k.key === 'STOCK';
   const gold = k.key === 'GOLD';
   const cur = fund.currency || BASE;

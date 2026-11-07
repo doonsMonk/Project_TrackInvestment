@@ -20,6 +20,14 @@ function wordsFor(fund) {
     return { price: 'price per gram', units: 'grams', folio: 'folio', sell: 'Redemption', buy: 'Purchase', thing: 'gold bond',
       example: '87654321 | Sovereign Gold Bonds 2021-22-Series-X | LUMP SUM | 8-Mar-2022 | -50,590.00 | 10 | 5,059.00' };
   }
+  if (fund.kind === 'FD') {
+    return { price: 'value', units: 'rupees', folio: 'account number', sell: 'Payout', buy: 'Deposit', thing: 'fixed deposit',
+      example: '50012345678 | lumpsum | 9-Jun-2026 | -1,00,000.00\n | Final Value at maturity | 9-Jun-2027 | 1,07,250.00' };
+  }
+  if (fund.kind === 'INS') {
+    return { price: 'value', units: 'rupees', folio: 'policy number', sell: 'Payout', buy: 'Premium', thing: 'policy',
+      example: '123456789 | LIC Endowment | SIP | 14-Feb-2021 | -10,000.00\n123456789 | LIC Endowment | SIP | 14-Feb-2022 | -10,000.00\n | | Value at maturity | 15-Feb-2041 | 4,00,000.00' };
+  }
   const stock = fund.kind === 'STOCK';
   return stock
     ? { price: 'price', units: 'shares', folio: 'account', sell: 'Sell', buy: 'Buy', thing: 'stock',
@@ -32,6 +40,12 @@ function columnsHint(fund, w) {
   if (fund.kind === 'NPS') {
     return 'Columns are read from the header row, or in this order without one: PRAN, Scheme name, Type, Date, Amount, Units E, Units C, Units G, NAV E, NAV C, NAV G. One row becomes one transaction per scheme. Negative amounts are contributions, shared out by each scheme’s value; a row with 0 amount and negative units everywhere is charges deducted; 0 amount with units going down in one scheme and up in another is a rebalance (switch).';
   }
+  if (fund.kind === 'INS') {
+    return 'Columns are read from the header row, or in this order without one: Policy number, Name, Type, Date, Amount. Every row with a negative amount (type SIP or lumpsum) is a premium paid. Rows dated after today are the premiums still to come: they are not imported, but together with the paid ones they set the policy’s schedule (premium, how often, first and last premium). A row whose type says “Value at maturity” gives the maturity date and value; a tick box below records all of that as the policy’s terms. A positive amount typed survival benefit, money back or dividend is money received from the policy; one typed payout, surrender or matured is the money received when the policy ended.';
+  }
+  if (fund.kind === 'FD') {
+    return 'Columns are read from the header row, or in this order without one: Account number, Type, Date, Amount (a Name column is fine too). A negative amount, or a type such as lumpsum / deposit, is the deposit (the principal). A line whose type says “Final Value at maturity” is not a transaction: it gives the maturity date and value, which a tick box below records as the deposit’s terms. A positive amount typed interest is interest paid out; one typed closure, redemption or matured is the money received when the deposit was closed.';
+  }
   const cap = (s) => s[0].toUpperCase() + s.slice(1);
   return `Columns are read from the header row, or in this order without one: ${cap(w.folio)}, Name, Type, Date, Amount, ${cap(w.units)}, ${cap(w.price)}. Negative amounts count as purchases; negative ${w.units} or a type like “${w.sell}” mean a sale. Missing ${w.price} or ${w.units} are filled from ${w.price} history. Amounts are in ${esc(fund.currency || 'INR')}.`;
 }
@@ -41,6 +55,10 @@ function formHtml(fund) {
   const stock = fund.kind === 'STOCK';
   const typeOptions = stock
     ? '<option value="LUMPSUM">Buy</option><option value="SIP">SIP (buy)</option>'
+    : fund.kind === 'FD'
+      ? '<option value="LUMPSUM">Deposit</option>'
+    : fund.kind === 'INS'
+      ? '<option value="SIP">Premium</option><option value="LUMPSUM">Single premium / top-up</option>'
     : fund.kind === 'GOLD'
       ? '<option value="LUMPSUM">Purchase</option><option value="SIP">SIP (purchase)</option>'
     : fund.kind === 'NPS'
@@ -61,12 +79,14 @@ function formHtml(fund) {
       </label>
     </div>
     <label class="field">Comment for imported rows (optional)
-      <input name="batch_note" maxlength="500" placeholder="e.g. Imported from ${stock ? 'broker contract notes' : fund.kind === 'NPS' ? 'the eNPS transaction statement' : 'CAS statement'}, Nov 2026">
+      <input name="batch_note" maxlength="500" placeholder="e.g. Imported from ${stock ? 'broker contract notes' : fund.kind === 'NPS' ? 'the eNPS transaction statement' : fund.kind === 'FD' ? 'the bank\'s FD advice' : fund.kind === 'INS' ? 'the premium receipts' : 'CAS statement'}, Nov 2026">
       <span class="hint">Applied to rows that have no comment column of their own. Comments can be edited per row after importing.</span>
     </label>
-    <label class="check"><input type="checkbox" name="skip_dupes" checked> Skip rows already recorded (same date, amount and ${w.units})</label>
-    <label class="check" ${fund.kind === 'NPS' ? 'hidden' : ''}><input type="checkbox" name="split_folios" checked> Split rows that list several ${w.folio}s (e.g. 1234567890/2345678901) equally between them: one transaction per ${w.folio} with half the amount and ${w.units}</label>
+    <label class="check"><input type="checkbox" name="skip_dupes" checked> Skip rows already recorded (same date${fund.kind === 'FD' || fund.kind === 'INS' ? ' and amount' : `, amount and ${w.units}`})</label>
+    <label class="check" ${fund.kind === 'NPS' || fund.kind === 'FD' || fund.kind === 'INS' ? 'hidden' : ''}><input type="checkbox" name="split_folios" checked> Split rows that list several ${w.folio}s (e.g. 1234567890/2345678901) equally between them: one transaction per ${w.folio} with half the amount and ${w.units}</label>
     ${fund.kind === 'GOLD' ? '<label class="check" id="gold-price-wrap" hidden><input type="checkbox" name="gold_price" checked> <span id="gold-price-text"></span></label>' : ''}
+    ${fund.kind === 'FD' ? '<label class="check" id="fd-maturity-wrap" hidden><input type="checkbox" name="fd_maturity" checked> <span id="fd-maturity-text"></span></label>' : ''}
+    ${fund.kind === 'INS' ? '<label class="check" id="ins-terms-wrap" hidden><input type="checkbox" name="ins_terms" checked> <span id="ins-terms-text"></span></label>' : ''}
     <div id="import-preview"><p class="empty small">Paste rows above to see a preview.</p></div>
     <div class="form-error" id="import-error" hidden></div>
     <div class="form-actions">
@@ -92,6 +112,9 @@ function looselyMatches(name, fund) {
     ...significantWords(fund.scheme?.scheme_name),
     ...significantWords(fund.quote?.name),
     ...significantWords(fund.details?.pfm),
+    ...significantWords(fund.details?.bank),
+    ...significantWords(fund.details?.insurer),
+    ...significantWords(fund.details?.plan),
     ...significantWords(fund.details?.series),
     ...significantWords(fund.details?.code),
     ...significantWords(fund.gold?.exchange_name),
@@ -369,6 +392,8 @@ export function openImportModal(fund, onDone) {
   const w = wordsFor(fund);
   const nps = fund.kind === 'NPS';
   const gold = fund.kind === 'GOLD';
+  const fdKind = fund.kind === 'FD';
+  const insKind = fund.kind === 'INS';
   const modal = openModal(`Import transactions · ${esc(fund.name)}`, formHtml(fund), { wide: true });
   const form = modal.querySelector('#import-form');
   const raw = form.elements.raw;
@@ -384,6 +409,30 @@ export function openImportModal(fund, onDone) {
   const manualGold = gold && fund.gold?.price_source !== 'sgb'; // a bond priced from the exchange needs no entered price
   const priceLine = () => (manualGold ? state.built.find((r) => r.status === 'price' && r.date && r.nav > 0) : null);
   const recordPrice = () => Boolean(priceLine() && form.elements.gold_price?.checked);
+  // a fixed deposit's sheet carries a "Final Value at maturity" line: its date and amount can be recorded as the deposit's terms
+  const maturityLine = () => (fdKind ? state.built.find((r) => r.status === 'maturity' && r.date && r.amount > 0) : null);
+  const recordMaturity = () => Boolean(maturityLine() && form.elements.fd_maturity?.checked);
+  // an insurance sheet gives the policy's terms: the "Value at maturity" line, and the premium rows (paid and still to
+  // come) from which the premium, how often it falls due and the first / last premium dates follow
+  const insTerms = () => {
+    if (!insKind) return null;
+    const ml = state.built.find((r) => r.status === 'maturity' && r.date && r.amount > 0) || null;
+    const prem = state.built.filter((r) => ['ok', 'dup', 'future'].includes(r.status) && (r.type === 'SIP' || r.type === 'LUMPSUM') && r.date && r.amount > 0);
+    const future = prem.filter((r) => r.status === 'future');
+    if (!ml && !future.length) return null;
+    const dates = prem.map((r) => r.date).sort();
+    const count = {};
+    prem.forEach((r) => { count[r.amount] = (count[r.amount] || 0) + 1; });
+    const premium = Object.keys(count).length ? Number(Object.keys(count).sort((a, b) => count[b] - count[a] || Number(b) - Number(a))[0]) : null;
+    const gaps = dates.slice(1).map((d, i) => (new Date(`${d}T00:00:00`) - new Date(`${dates[i]}T00:00:00`)) / 864e5).filter((g) => g > 0).sort((a, b) => a - b);
+    const gap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : null;
+    const frequency = gap === null ? null : gap >= 300 ? 'yearly' : gap >= 150 ? 'half-yearly' : gap >= 75 ? 'quarterly' : 'monthly';
+    return {
+      maturity_date: ml?.date || null, maturity_value: ml?.amount || null, premium, frequency,
+      first_premium: dates[0] || null, last_premium: future.length ? dates[dates.length - 1] : null, future: future.length, premiums: prem.length,
+    };
+  };
+  const recordTerms = () => Boolean(insTerms() && form.elements.ins_terms?.checked);
 
   function reparse() {
     const { rows, header } = parseTable(raw.value);
@@ -400,6 +449,7 @@ export function openImportModal(fund, onDone) {
       existing: fund.transactions || [],
       splitFolios: !nps && form.elements.split_folios.checked,
       currency: fund.currency || 'INR',
+      kind: fund.kind || 'MF',
     });
     renderPreview();
   }
@@ -407,7 +457,7 @@ export function openImportModal(fund, onDone) {
   function nameWarning() {
     const i = state.map.indexOf('name');
     if (i < 0) return '';
-    const summary = new Set(state.built.filter((b) => b.status === 'price').map((b) => b.index));
+    const summary = new Set(state.built.filter((b) => b.status === 'price' || b.status === 'maturity').map((b) => b.index));
     const names = [...new Set(state.rows.map((r, idx) => (summary.has(idx) ? '' : r[i])).filter(Boolean))];
     if (names.length > 1 && !nps) {
       return `<div class="banner warn small">The rows mention ${names.length} different names. Everything imported here goes into <b>${esc(fund.name)}</b>. Paste one ${w.thing} at a time, or set that column to “ignore” if this is intended.</div>`;
@@ -426,13 +476,33 @@ export function openImportModal(fund, onDone) {
       return;
     }
     const skip = skipDupes();
-    const counts = { ok: 0, dup: 0, error: 0, price: 0 };
+    const counts = { ok: 0, dup: 0, error: 0, price: 0, maturity: 0, future: 0 };
     state.built.forEach((r) => counts[r.status]++);
     const pl = priceLine();
     const priceWrap = modal.querySelector('#gold-price-wrap');
     if (priceWrap) {
       priceWrap.hidden = !pl;
       if (pl) modal.querySelector('#gold-price-text').textContent = `Also record the gold price ₹${pl.nav.toLocaleString('en-IN')} per gram as of ${pl.date} from the sheet's Current Value line (it values every gold bond)`;
+    }
+    const ml = maturityLine();
+    const maturityWrap = modal.querySelector('#fd-maturity-wrap');
+    if (maturityWrap) {
+      maturityWrap.hidden = !ml;
+      if (ml) modal.querySelector('#fd-maturity-text').textContent = `Also record the maturity from the sheet's Final Value at maturity line: ₹${ml.amount.toLocaleString('en-IN')} on ${ml.date}${fund.fd?.has_terms ? ` (replacing ${fund.details?.maturity_date} · ₹${Number(fund.details?.maturity_value).toLocaleString('en-IN')})` : ''}. It values the deposit until then.`;
+    }
+    const terms = insTerms();
+    const termsWrap = modal.querySelector('#ins-terms-wrap');
+    if (termsWrap) {
+      termsWrap.hidden = !terms;
+      if (terms) {
+        const bits = [
+          terms.maturity_value ? `maturity ₹${terms.maturity_value.toLocaleString('en-IN')} on ${terms.maturity_date}` : '',
+          terms.premium ? `premium ₹${terms.premium.toLocaleString('en-IN')}${terms.frequency ? ` ${terms.frequency}` : ''}` : '',
+          terms.first_premium ? `from ${terms.first_premium}${terms.last_premium ? ` to ${terms.last_premium}` : ''}` : '',
+          terms.future ? `${terms.future} premium${terms.future === 1 ? '' : 's'} still to come, not imported` : '',
+        ].filter(Boolean).join(' · ');
+        modal.querySelector('#ins-terms-text').textContent = `Also record the policy's terms from the sheet: ${bits}. They set the schedule and value the policy until maturity.`;
+      }
     }
     const n = toImport().length;
     const splitRows = new Set(state.built.filter((b) => b.parts && !b.scheme).map((b) => b.index)).size;
@@ -450,14 +520,20 @@ export function openImportModal(fund, onDone) {
     const body = state.built
       .slice(0, PREVIEW_LIMIT)
       .map((b) => {
-        const cls = b.status === 'error' ? 'status-err' : (b.status === 'dup' && skip) || b.status === 'price' ? 'status-dup' : 'status-ok';
+        const cls = b.status === 'error' ? 'status-err' : (b.status === 'dup' && skip) || b.status === 'price' || b.status === 'maturity' || b.status === 'future' ? 'status-dup' : 'status-ok';
         const base = b.message || 'Ready';
         const label = b.status === 'error' ? b.message
           : b.status === 'price' ? (manualGold && b.nav > 0 && b.date ? `Gold price · ₹${b.nav.toLocaleString('en-IN')} per gram on ${b.date}` : gold ? 'Skipped · summary line (this bond is priced from the exchange)' : 'Skipped · summary line')
+          : b.status === 'maturity' ? ((fdKind || insKind) && b.amount > 0 && b.date ? `Maturity · ₹${b.amount.toLocaleString('en-IN')} on ${b.date}` : 'Skipped · maturity line')
+          : b.status === 'future' ? (insKind ? `${b.message} · not imported` : 'Skipped · dated in the future')
           : b.status === 'dup' ? `${b.scheme ? `${b.scheme}: ` : ''}${skip ? 'Skipped · already recorded' : 'Duplicate · will import'}`
+          : fdKind && (b.type === 'SIP' || b.type === 'LUMPSUM') ? `Deposit · ₹${b.amount.toLocaleString('en-IN')}`
+          : fdKind && b.type === 'REDEMPTION' ? `Payout · ₹${b.amount.toLocaleString('en-IN')} received · closes the deposit`
+          : insKind && (b.type === 'SIP' || b.type === 'LUMPSUM') ? `Premium · ₹${b.amount.toLocaleString('en-IN')}`
+          : insKind && b.type === 'REDEMPTION' ? `Payout · ₹${b.amount.toLocaleString('en-IN')} received · closes the policy`
           : b.scheme ? base
           : b.type === 'REDEMPTION' ? `${w.sell} · ${base === 'Ready' ? `${b.units ?? '?'} ${w.units} sold` : base}`
-          : b.type === 'DIVIDEND' ? `${gold ? 'Interest' : 'Dividend'} · ${b.amount.toLocaleString('en-IN')} ${fund.currency || 'INR'} received`
+          : b.type === 'DIVIDEND' ? `${gold || fdKind ? 'Interest' : insKind ? 'Benefit' : 'Dividend'} · ${b.amount.toLocaleString('en-IN')} ${fund.currency || 'INR'} received`
           : b.type === 'BONUS' ? `Bonus · ${b.units} free ${w.units}`
           : b.type === 'CHARGE' ? `Charges · ${b.units} ${w.units} deducted${b.message && b.message !== 'Ready' ? ` · ${b.message}` : ''}`
           : TYPE_WORDS[b.type] && base === 'Ready' ? TYPE_WORDS[b.type] : base;
@@ -473,10 +549,12 @@ export function openImportModal(fund, onDone) {
       ${unknownSchemes.length ? `<div class="banner warn small">The data has units for scheme${unknownSchemes.length === 1 ? '' : 's'} <b>${esc(unknownSchemes.join(', '))}</b>, which this account is not set up with. Add the scheme under Edit NPS first, or set that column to “ignore”.</div>` : ''}
       ${nameWarning()}
       <div class="preview-wrap"><table class="data preview"><thead><tr><th>Status</th>${mapRow}</tr></thead><tbody>${body}</tbody></table></div>${more}`;
-    submit.disabled = (n === 0 && !recordPrice()) || unknownSchemes.length > 0;
-    submit.textContent = n ? `Import ${n} transaction${n === 1 ? '' : 's'}${recordPrice() ? ' + gold price' : ''}` : recordPrice() ? 'Record the gold price' : 'Import';
+    submit.disabled = (n === 0 && !recordPrice() && !recordMaturity() && !recordTerms()) || unknownSchemes.length > 0;
+    submit.textContent = n ? `Import ${n} transaction${n === 1 ? '' : 's'}${recordPrice() ? ' + gold price' : ''}${recordMaturity() ? ' + maturity' : ''}${recordTerms() ? ' + terms' : ''}` : recordPrice() ? 'Record the gold price' : recordMaturity() ? 'Record the maturity' : recordTerms() ? 'Record the policy terms' : 'Import';
   }
   form.elements.gold_price?.addEventListener('change', renderPreview);
+  form.elements.fd_maturity?.addEventListener('change', renderPreview);
+  form.elements.ins_terms?.addEventListener('change', renderPreview);
 
   raw.addEventListener('input', () => {
     clearTimeout(timer);
@@ -516,15 +594,39 @@ export function openImportModal(fund, onDone) {
     }));
     // A split row's own comment is kept; the batch comment is only used for rows that have none.
     const pl = recordPrice() ? priceLine() : null;
-    if (!items.length && !pl) return;
+    const ml = recordMaturity() ? maturityLine() : null;
+    const terms = recordTerms() ? insTerms() : null;
+    if (!items.length && !pl && !ml && !terms) return;
     const label = submit.textContent;
     submit.disabled = true;
     submit.textContent = 'Importing…';
     try {
       if (pl) await api.post('/api/gold/price', { date: pl.date, price: pl.nav });
       const res = items.length ? await api.post(`/api/funds/${fund.id}/transactions/bulk`, { transactions: items }) : { created: 0 };
+      if (ml) {
+        await api.put(`/api/funds/${fund.id}`, {
+          name: fund.name, kind: fund.kind, scheme_code: null, symbol: null, folio_number: fund.folio_number || '', notes: fund.notes || '',
+          locked: Boolean(fund.locked), lock_in_until: fund.lock_in_until || (fund.locked ? ml.date : null),
+          details: { ...(fund.details || {}), maturity_date: ml.date, maturity_value: ml.amount },
+        });
+      }
+      if (terms) {
+        const old = fund.details || {};
+        const details = { ...old };
+        if (terms.maturity_date) { details.maturity_date = terms.maturity_date; details.maturity_value = terms.maturity_value; }
+        if (terms.premium && terms.premiums >= 2) details.premium = terms.premium;
+        else if (terms.premium && !old.premium) details.premium = terms.premium;
+        if (terms.frequency) details.frequency = terms.frequency;
+        if (terms.first_premium && (!old.first_premium || terms.first_premium < old.first_premium)) details.first_premium = terms.first_premium;
+        if (terms.last_premium) details.last_premium = terms.last_premium;
+        await api.put(`/api/funds/${fund.id}`, {
+          name: fund.name, kind: fund.kind, scheme_code: null, symbol: null, folio_number: fund.folio_number || '', notes: fund.notes || '',
+          locked: Boolean(fund.locked), lock_in_until: fund.lock_in_until || (fund.locked && details.maturity_date ? details.maturity_date : null),
+          details,
+        });
+      }
       closeModal();
-      toast(`${items.length ? `Imported ${res.created} transaction${res.created === 1 ? '' : 's'}` : ''}${pl ? `${items.length ? ' · ' : ''}gold price recorded for ${pl.date}` : ''}`);
+      toast(`${items.length ? `Imported ${res.created} transaction${res.created === 1 ? '' : 's'}` : ''}${pl ? `${items.length ? ' · ' : ''}gold price recorded for ${pl.date}` : ''}${ml ? `${items.length || pl ? ' · ' : ''}maturity set: ₹${ml.amount.toLocaleString('en-IN')} on ${ml.date}` : ''}${terms ? `${items.length ? ' · ' : ''}policy terms recorded` : ''}`);
       onDone?.();
     } catch (e2) {
       err.textContent = e2.message;

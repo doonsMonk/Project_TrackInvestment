@@ -105,7 +105,7 @@ FUNDS_TABLE = """
 CREATE TABLE IF NOT EXISTS {name} (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     name          TEXT    NOT NULL,
-    kind          TEXT    NOT NULL DEFAULT 'MF' CHECK (kind IN ('MF', 'STOCK', 'NPS', 'EPF', 'PPF', 'GOLD')),
+    kind          TEXT    NOT NULL DEFAULT 'MF' CHECK (kind IN ('MF', 'STOCK', 'NPS', 'EPF', 'PPF', 'GOLD', 'FD', 'INS')),
     scheme_code   INTEGER,                      -- AMFI scheme code (mutual funds; used by mfapi.in)
     symbol        TEXT,                         -- ticker symbol (stocks; used by the quote source), e.g. BHP.AX
     exchange      TEXT,                         -- stocks: exchange name as reported by the quote source
@@ -280,8 +280,8 @@ def _migrate(conn: sqlite3.Connection) -> bool:
     """Bring an older database up to the current schema. Returns True if anything changed."""
     changed = False
     fund_sql, fund_cols = _table_state(conn, "funds")
-    if fund_sql and ("details" not in fund_cols or "'GOLD'" not in fund_sql):
-        # funds gained kind / symbol / exchange / currency (stocks), then details and the NPS, EPF, PPF and GOLD kinds. Foreign keys
+    if fund_sql and ("details" not in fund_cols or "'INS'" not in fund_sql):
+        # funds gained kind / symbol / exchange / currency (stocks), then details and the NPS, EPF, PPF, GOLD, FD and INS kinds. Foreign keys
         # must be off while the old table is dropped, or ON DELETE CASCADE would wipe the transactions. The pragma
         # is ignored inside a transaction, so make sure none is open, and check the transaction count afterwards.
         if conn.in_transaction:

@@ -2,7 +2,7 @@
 
 Investment Tracker is a small app that runs on your own computer and keeps track of your investments:
 Indian mutual funds, shares on any stock exchange in the world, your NPS (National Pension System)
-account and your EPF (Employees' Provident Fund). It records which funds, stocks and NPS schemes you hold,
+account, your EPF (Employees' Provident Fund) and PPF accounts, Sovereign Gold Bonds, bank fixed deposits and life insurance policies (LIC endowment plans and the like). It records which funds, stocks and NPS schemes you hold,
 every EPF deposit and the interest credited on it, every purchase, sale, dividend and bonus, what the holdings are worth today, and how well
 they have performed. All data stays on your machine in a password-protected file. The only things the
 app fetches from the internet are the daily NAVs of your funds, the daily prices of your stocks, the daily NAVs of your NPS schemes and the exchange rates needed to
@@ -36,6 +36,8 @@ This guide covers every feature in the app. The last section lists what was adde
 | **Gold bond** | A Sovereign Gold Bond (SGB) series you hold: so many grams of gold, bought at the issue price, earning 2.5 % a year on that price paid every six months, redeemed at the gold price after eight years (or from the fifth year). It is valued at the series' NSE traded price, fetched from NSE by its code; a bond without a code is valued at a **gold price per gram** you enter. |
 | **PPF account** | Your Public Provident Fund account. Deposits whenever you like, interest credited once a year on 31 March at the declared rate, and maturity 15 financial years after the year of opening. As with EPF, nothing is looked up online: you enter deposits and the interest credited, and the app keeps the balance. |
 | **EPF account** | Your Employees' Provident Fund account (one per UAN). It has two **shares** that earn interest, the **employee share** and the **employer share**, and the employer's **pension (EPS) contribution**, which goes to the pension scheme and is tracked separately. Nothing is looked up online: you enter deposits and the interest EPFO credits each year, and the app keeps the balances. |
+| **Fixed deposit** | A bank or post-office fixed deposit: a principal placed for a fixed term, with the maturity date and value from the bank's FD advice as its terms. It is valued along the curve from the principal to the maturity value; nothing is looked up online. |
+| **Insurance policy** | A life insurance policy with a maturity value, such as an LIC endowment or money-back plan: premiums on a schedule (yearly, half-yearly, quarterly or monthly) and a payout known in advance. The app works out the policy's own rate of return over every premium, paid and still due, and values the premiums paid at that rate. |
 
 ---
 
@@ -167,9 +169,9 @@ has no exchange rate yet, a banner names it and it is left out of the rupee tota
 
 ---
 
-## 4. Adding a mutual fund, a stock, an NPS, EPF or PPF account, or a gold bond
+## 4. Adding a mutual fund, a stock, an NPS, EPF or PPF account, a gold bond, a fixed deposit or an insurance policy
 
-Click **+ Add fund / stock**. At the top of the dialog choose **Mutual fund**, **Stock / ETF**, **NPS**, **EPF**, **PPF** or **Gold (SGB)**.
+Click **+ Add fund / stock**. At the top of the dialog choose **Mutual fund**, **Stock / ETF**, **NPS**, **EPF**, **PPF**, **Gold (SGB)**, **Fixed deposit** or **Insurance policy (LIC)**.
 
 ### Mutual fund
 
@@ -246,6 +248,42 @@ explains how you enter deposits and interest, and section 15 the PPF rules the a
 
 Section 16 explains how a gold bond is valued and what the bond page shows.
 
+### Fixed deposit
+
+1. **Bank** (optional) – it becomes part of the display name (`FD · SBI`).
+2. **Deposit date** and **Principal** – recorded as the deposit transaction as soon as you click Add. Leave
+   both empty if you will import the deposit from a sheet instead (section 7).
+3. **Maturity date** and **Maturity value** – from the bank's FD advice. They are what the deposit is worth
+   at the end, and the app values it along a constant-rate curve between the two dates (section 17). The
+   maturity date is filled into **Locked until**. Leave them empty if you do not have the advice yet; the
+   deposit then sits at its principal until you enter them with Edit fixed deposit.
+4. **Interest rate** (optional) – the rate the bank quoted, for your records. The app shows the effective
+   annual rate it works out from the principal and the maturity value beside it.
+5. **Interest** – *Cumulative* (interest is paid with the principal at maturity) or *Paid out
+   periodically* (you receive the interest along the way and record each credit as a transaction).
+6. **FD account number** – the account or receipt number on the advice (optional).
+
+A fixed deposit is marked **Locked** until maturity. Nothing is fetched online for it.
+
+### Insurance policy
+
+1. **Insurer** (LIC is pre-filled) and **Plan** (optional, for example `Jeevan Anand (149)`); together they make
+   the display name.
+2. **Premium** and how often it is **Paid** (yearly, half-yearly, quarterly or monthly), as you pay it.
+3. **First premium** – the policy's start date; every due date follows from it. **Last premium** is optional:
+   leave it empty when premiums run until maturity (the last due date before it), set it for a plan whose
+   premiums stop earlier.
+4. **Maturity date** and **Maturity value** – from the policy document or the insurer's estimate (sum assured
+   plus the bonuses you expect). They are what the policy pays at the end, and the app values the policy
+   towards them (section 18). The maturity date is filled into **Locked until**.
+5. **Sum assured** (optional) – the life cover, for your records.
+6. **Record every premium due up to today as paid** – ticked by default: one Premium transaction is recorded
+   per due date from the first premium to today, so a policy that has run for years is complete in one go.
+   Untick it if you will import the premiums from a sheet instead (section 7).
+7. **Policy number** – from the bond or the premium receipts (optional).
+
+A policy is marked **Locked** until maturity. Nothing is fetched online for it.
+
 ### Both
 
 3. **Display name** – how the holding appears in the app. Shorten it if you like.
@@ -260,7 +298,7 @@ If you picked the wrong scheme or symbol, don't delete the holding: see section 
 
 ---
 
-## 5. The Fund / Stock / NPS / EPF / PPF / Gold bond page
+## 5. The Fund / Stock / NPS / EPF / PPF / Gold bond / Fixed deposit / Insurance policy page
 
 Open a holding from the portfolio table. The page shows:
 
@@ -339,6 +377,29 @@ early-redemption date, the maturity with the time left, the price with its sourc
 price** (the rate RBI redeems at) with how far the market price sits from it. Transactions are purchases
 (grams at a price per gram), **Interest** receipts and redemptions or sales.
 
+**Fixed deposits** have the tiles **Principal** (with the deposit date), **Maturity value** (with the date,
+the interest it includes and the time left; after the payout this tile becomes **Paid out**), **Interest
+rate** (the effective annual rate implied by the two figures, with the quoted rate beside it) and **XIRR**.
+The **Deposit details** card lists the bank, the account number, the deposit, whether the interest is
+cumulative or paid out, the maturity date and value, the rate, the value today with the interest accrued so
+far, the interest paid out and, once closed, the payout. A **Matured / paid out** button in the header
+records the money the bank paid (section 6); there is no Exit button. A banner reminds you when the
+maturity has passed and the payout is still to be recorded, or when the maturity date and value have not
+been entered yet. Transactions are the deposit, **Interest paid out** credits and the **Payout**, shown with
+their date, type, amount and comment.
+
+**Insurance policies** have the tiles **Premiums paid** (how many of the schedule, the premium and when the
+next falls due), **Maturity value** (with the date, the time left and what is still to be paid; **Paid out**
+once the policy has ended), **Policy return** (the rate at which every premium, paid and still due, grows to
+the maturity value) and **XIRR** (on the premiums paid and today's accrued value, which comes to the same
+rate while the schedule is kept). The **Policy details** card lists the insurer, plan and policy number, the
+premium and its frequency, the premiums paid and still to come with the total outlay, the first, last and
+next due dates, the maturity date and value with the gain over all the premiums, the sum assured, the policy
+return, the value today with the amount accrued, the benefits received and, once closed, the payout. Two
+buttons sit in the header: **Premium paid** (the next premium from the schedule, pre-filled) and **Matured /
+paid out**; there is no Exit button. Banners warn when a premium fell due without being recorded, when the
+maturity has passed and the payout is still to be recorded, and when the maturity date and value are not set.
+
 **By folio / By account** – shown when there is more than one. One row per folio with its transaction
 count, invested amount, units, current value, P&L and XIRR, plus a totals row. Clicking a row applies the
 filter.
@@ -406,6 +467,35 @@ EPF has its own forms, because one month means several entries; PPF uses the sam
 - **PPF** – **+ Add entry** opens the same dialog with one amount box: a deposit (dated the day you paid;
   deposits made by the 5th earn that month's interest), a transfer in or opening balance, interest credited,
   or a withdrawal. **Year interest** records the interest credited for a financial year, dated 31 March.
+
+### Fixed deposit entries
+
+A fixed deposit has a short form of its own: date, type and amount.
+
+- **Deposit** – the principal placed with the bank. The dialog that adds the holding records it for you;
+  use this for a further deposit, or when you added the holding without one.
+- **Interest paid out** – interest credited to your bank account from a non-cumulative deposit. It is cash
+  received, like a dividend: counted in the XIRR and the realised figure, the deposit itself unchanged.
+- **Payout (maturity or premature closure)** – the money the bank paid when the deposit ended. The whole
+  deposit leaves the holding, the holding is marked **Closed**, and the amount above the principal is the
+  realised gain (the interest earned). **Matured / paid out** in the page header opens this form with the
+  maturity value pre-filled once the maturity date has passed, or today's value before it; change it to the
+  amount actually credited (after any tax deducted at source). A renewal is a new deposit: record the payout
+  here and add the renewed deposit as a new holding.
+
+### Insurance policy entries
+
+The same short form (date, type, amount) serves a policy:
+
+- **Premium** – a premium paid, as paid. **Premium paid** in the page header opens the form with the next due
+  date from the schedule (or the first one that was missed) and the premium pre-filled; change the date to the
+  day you actually paid. **Single premium / top-up** is a one-off payment outside the schedule.
+- **Benefit received** – a survival benefit (money-back plans) or a bonus paid out while the policy runs on.
+  It is cash received, like a dividend; the policy's rate of return takes it into account.
+- **Payout (maturity or surrender)** – the money the insurer paid when the policy ended, at maturity or on
+  surrender. The whole policy leaves the holding, it is marked **Closed**, and the amount above the premiums
+  paid is the realised gain. **Matured / paid out** opens this form with the maturity value pre-filled once
+  the maturity date has passed, or today's value before it.
 
 ### Exiting a holding
 
@@ -489,6 +579,23 @@ commas, semicolons and `|` are all accepted as separators.
   price per gram) is not a transaction: the preview marks it as a summary line, and for a bond priced by
   hand a tick box offers to record its price per gram as the **gold price** for that date. For a bond priced
   from the exchange, and for any other kind of holding, such a line is simply skipped.
+- **Fixed deposit sheets** need only an account number, a type, a date and an amount, with or without a
+  header (`Folio Number/AccountNumber | Type of Investment | Date of purchase | Amount Invested`). The row
+  typed `lumpsum` with a negative amount is the deposit. A row whose type says **Final Value at maturity**
+  is not a transaction: the preview marks it as a maturity line and a tick box offers to record its date and
+  amount as the deposit's maturity date and value (replacing what the holding has). Rows typed `interest`
+  with a positive amount import as **Interest paid out**; a positive amount typed `closure`, `matured` or
+  `redemption` imports as the **Payout** and closes the deposit. An empty first cell (the maturity line has
+  no account number) is kept in place, so rows copied straight from Excel line up.
+- **Insurance policy sheets** use the same columns (policy number, name, type, date, amount) and usually list
+  the whole premium schedule: every row with a negative amount is a premium. Rows dated up to today import as
+  premiums paid; rows dated after today are the premiums still to come, shown as **Future premium · due …**
+  and not imported. A row whose type says **Value at maturity** gives the maturity date and value. A tick box
+  offers to record the policy's terms from all of this: the maturity, the premium (the most common amount),
+  how often it is paid (from the gaps between the dates), the first premium and, when future rows are
+  present, the last one. Rows typed `survival benefit`, `money back` or `dividend` with a positive amount
+  import as **Benefit received**; `surrender`, `matured` or `payout` rows as the **Payout**.
+- Rows dated after today are never imported, for any kind of holding; the preview says so.
 - If a purchase or sale row has units but no price, or a price but no units, the missing one is
   calculated. If it has neither, the price for that date is looked up from history.
 - A comment column is imported as the transaction's comment. **Comment for imported rows** applies one
@@ -623,6 +730,22 @@ Current Value line); one entered price, with its date, serves every such bond.
   each entry from its date on). Interest payments are treated exactly like dividends: realised, part of the
   XIRR, and shown as "interest" rather than "dividends". A redemption or sale is a sale of grams at that
   day's price, with the FIFO gain as for any holding.
+- **Fixed deposit value** grows from the principal on the deposit date to the maturity value on the
+  maturity date at a constant rate: on any day in between it is principal × (maturity value ÷
+  principal)^(days elapsed ÷ days in the term), and from the maturity date on it is the maturity value.
+  The **effective annual rate** is (maturity value ÷ principal)^(365.25 ÷ days in the term) − 1; a
+  quarterly-compounded quoted rate gives a slightly higher effective rate. Interest paid out is treated
+  like a dividend. The payout is a sale of the whole deposit at the amount received, so the realised gain
+  is the interest earned. Without a maturity date and value the deposit is simply worth its principal.
+- **Insurance policy value.** The policy's **rate of return** is the annual rate at which every premium
+  (the ones paid, as recorded, and the ones still due, from the schedule), less any benefit already
+  received, grows to exactly the maturity value on the maturity date: the XIRR of the whole plan. On any
+  day the policy is worth the premiums paid so far, each grown at that rate from the day it was paid, less
+  the benefits received grown the same way; it reaches the maturity value on the maturity date once every
+  premium has been paid, and stays there. The value per rupee paid is that accrued value divided by the
+  rupees paid, so the holding's own XIRR equals the policy rate as long as the schedule is kept. The payout is
+  a sale of the whole policy at the amount received, with the gain over the premiums paid as the realised
+  gain. Without a maturity date and value the policy is worth the premiums paid.
 - **Dividends** = cash received as dividends or IDCW payouts. They are **realised**: the money is already
   in your bank account, so they are shown together with the gains from sales as the realised figure, and
   never inside the unrealised profit. They do not reduce the cost of your holding (that figure is what
@@ -765,7 +888,56 @@ held in demat form can be sold on the exchange at any time. The app records this
 
 ---
 
-## 17. Your data: where it is, backups and safety
+## 17. Fixed deposits: maturity value, interest and payout
+
+A bank fixed deposit is money placed for a fixed term at a fixed rate. The bank's FD advice states the
+principal, the deposit date, the maturity date and the maturity value (or, for a deposit whose interest is
+paid out, the rate and the payout frequency). The app keeps it simple:
+
+- **One holding per deposit.** The deposit is the principal; the maturity date and value are the holding's
+  terms, entered in the add / edit dialog or taken from a sheet's *Final Value at maturity* line.
+- **Valued along the curve.** Between the two dates the deposit is worth what it has accrued so far at the
+  rate implied by the two figures, so the value chart rises smoothly and the XIRR equals the effective rate.
+  Without the terms the deposit is worth its principal.
+- **Interest paid out** (non-cumulative deposits) is recorded as cash received. For such a deposit the
+  maturity value is usually the principal itself.
+- **Payout.** When the deposit matures (or is closed early), record what the bank paid with **Matured /
+  paid out**; the holding closes with the interest earned as its realised gain. The payout is pre-filled with
+  the maturity value, which you change to the amount actually credited if tax was deducted at source. A
+  renewal is a new deposit holding.
+- **Tax.** FD interest is taxable as income; the app does not work the tax out, it only records what you
+  received.
+
+---
+
+## 18. Insurance policies: premiums, the policy's return and the payout
+
+A traditional life insurance policy (an LIC endowment or money-back plan, for example) takes a fixed premium
+on fixed dates for a fixed number of years and pays a sum assured plus bonuses at maturity. The policy
+document gives the premium and its due dates; the maturity value is the sum assured plus the bonuses you
+expect (the insurer's benefit illustration, or your own estimate), and you can change it whenever a bonus
+is declared. The app records this as:
+
+- **One holding per policy**, with the premium, how often it is paid, the first and last premium dates and
+  the maturity date and value as its terms. The due dates follow from the first premium and the frequency,
+  up to the last premium or, without one, the last due date before maturity.
+- **Premiums** are the transactions: one per due date, recorded as paid. The add dialog can record every
+  premium due so far in one go, a sheet can import them, and **Premium paid** records the next one when it
+  falls due. A premium that fell due without being recorded is pointed out on the page and the portfolio
+  row; the schedule still counts it as due.
+- **The policy's return** is the rate that takes every premium of the schedule, paid and still to come, to
+  the maturity value (section 11). It is the honest return of the plan as a whole, and it is what the
+  policy is valued at: the premiums paid so far, grown at that rate. Compare it with what the same money
+  would earn elsewhere.
+- **Benefits received** along the way (survival benefits, bonuses paid out) are cash received; they lower
+  what remains in the policy and enter the rate.
+- **Payout.** At maturity, or on surrender, record what the insurer paid with **Matured / paid out**; the
+  holding closes with the gain over the premiums paid as its realised gain.
+- The **sum assured** (the life cover) is kept for your records; it plays no part in the valuation.
+
+---
+
+## 19. Your data: where it is, backups and safety
 
 - Everything is stored in a single file named **`portfolio.enc`**, inside the `data` folder next to the
   exe (or inside the project's `data` folder when running from source). If the folder next to the exe is
@@ -819,7 +991,7 @@ treated as a change.
 
 ---
 
-## 18. The Android app
+## 20. The Android app
 
 The same app runs on an Android phone: the backend runs inside the app, the pages are the ones you know, and the
 data is the same encrypted file, `portfolio.enc`, kept in the app's private storage. It is installed from the
@@ -830,7 +1002,7 @@ a few seconds; after that it opens like any other app and asks for the vault pas
 - **The same data on the phone and the PC.** Long-press anywhere on a page to open the menu. **Save vault as…**
   writes the phone's vault file to a place you pick: Google Drive, OneDrive, Dropbox and the Downloads folder all
   appear in the picker. **Open vault file…** replaces the phone's vault with a file you pick (it asks first, and
-  the app locks so the file's own password is needed). On the PC, the vault is in the data folder (section 17),
+  the app locks so the file's own password is needed). On the PC, the vault is in the data folder (section 19),
   which can itself be a cloud-synced folder. Copy the file in one direction at a time, and keep only one device
   open while you make changes: both apps refuse to overwrite a file that another device changed.
 - **Prices** are fetched by the phone the same way: mutual funds, stocks, NPS and gold bonds refresh when
@@ -841,7 +1013,7 @@ a few seconds; after that it opens like any other app and asks for the vault pas
 
 ---
 
-## 19. Tips and shortcuts
+## 21. Tips and shortcuts
 
 - **Enter** on a highlighted holding or folio row opens it; **Escape** closes any dialog.
 - Bookmark a holding's page, or a folio view of it, in your browser; the address includes both.
@@ -852,7 +1024,7 @@ a few seconds; after that it opens like any other app and asks for the vault pas
 
 ---
 
-## 20. Troubleshooting
+## 22. Troubleshooting
 
 | Problem | What to do |
 |---|---|
@@ -879,7 +1051,7 @@ a few seconds; after that it opens like any other app and asks for the vault pas
 
 ---
 
-## 21. Feature history
+## 23. Feature history
 
 | Date | Added |
 |---|---|
@@ -900,6 +1072,8 @@ a few seconds; after that it opens like any other app and asks for the vault pas
 | 4 Nov 2026 | Dividends are shown as realised, together with gains from sales, never inside the unrealised profit; the investment figure is also shown net of dividends received. |
 | 4 Nov 2026 | Exit and closed holdings: an Exit button records the sale of everything held; any sale that brings the units to zero marks the holding Closed and lists it under a Closed tab on the portfolio page, keeping all its data. |
 | 4 Nov 2026 | Version 0.4.0: the version is shown in the top bar; upgrades can no longer show stale screens (the window cache is cleared on start and the server forbids caching), and starting a newer exe replaces an older instance that is still running. |
+| 7 Nov 2026 | Version 0.12.0: life insurance policies (LIC endowment and money-back plans). A policy holds its premium, frequency, first / last premium dates and maturity value as terms; its return is the rate that takes every premium, paid and still due, to the maturity value, and the premiums paid are valued at that rate. The add dialog records every premium due so far in one go, a Premium paid button records the next, overdue premiums are flagged, benefits received and the payout / surrender are recorded like FD interest and payouts. A premium sheet imports directly: paid rows become premiums, future rows and the Value at maturity line set the terms. Rows dated after today are no longer imported for any kind of holding. Insurance gets its own slice of the allocation ring. |
+| 7 Nov 2026 | Version 0.11.0: fixed deposits. A deposit is one holding with the principal and the bank's maturity date and value as its terms; it is valued along a constant-rate curve between the two dates (effective rate shown), interest paid out is recorded as cash, and Matured / paid out records the payout and closes it. The add dialog records the deposit in one go; a sheet with an account number, type, date and amount imports directly and its Final Value at maturity line sets the terms. Fixed deposits get their own slice of the allocation ring. Pasted rows now keep an empty first cell, and long account numbers are no longer mistaken for amounts. |
 | 6 Nov 2026 | Version 0.10.0: cloud backup. Connect Google Drive, OneDrive or Dropbox through the provider's own sign-in (one-time client ID setup); every change is uploaded a few seconds later, any device can restore the latest copy, and the lock screen points out a newer copy saved elsewhere. |
 | 6 Nov 2026 | Android app: the backend and frontend packaged for a phone (an APK built from the android folder), with the vault opened from and saved to any file or cloud folder from a long-press menu. |
 | 6 Nov 2026 | Version 0.9.0: a Data folder setting (Change folder… on the lock screen; kept in settings.json next to the exe) so the vault can live in a cloud-synced folder, and a guard that locks the app instead of overwriting a vault file another device or a sync client replaced, keeping its own unsaved changes in a side file. The lock screen shows where the vault file is. Request models now run on pydantic v1 as well as v2, for the Android build. |

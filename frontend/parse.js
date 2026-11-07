@@ -90,7 +90,7 @@ function splitRows(text) {
   const lines = joinQuotedLines(String(text || ''))
     .replace(/\r\n?/g, '\n')
     .split('\n')
-    .map((l) => l.trim())
+    .map((l) => l.replace(/^ +/, '').replace(/\s+$/, '')) // a leading tab is an empty first cell, so only spaces go
     .filter((l) => l !== '' && !/^[\s|:\-+]+$/.test(l)); // drop blank and markdown separator rows
   if (!lines.length) return { rows: [], delimiter: null };
   const delimiter = detectDelimiter(lines);
@@ -134,6 +134,7 @@ export function autoMap(header, rows) {
     const nums = vals.filter((v) => parseNumber(v) !== null).length;
     if (dates / vals.length >= 0.6) map[i] = 'date';
     else if (vals.some((v) => /\b(sip|lump\s*sum|purchase|systematic|buy|sell|bought|sold)\b/i.test(v))) map[i] = 'type';
+    else if (vals.every((v) => /^\d{9,}$/.test(v))) map[i] = 'folio'; // long plain digit runs are account numbers, not amounts
     else if (nums / vals.length >= 0.8) numeric.push(i);
     else if (vals.every((v) => /^[\w\/\-]+$/.test(v)) && vals.every((v) => /\d/.test(v))) map[i] = 'folio';
     else map[i] = 'name';
@@ -194,10 +195,10 @@ export function parseNumber(s) {
 export function parseType(s, fallback = 'SIP') {
   const v = String(s ?? '');
   if (/reinvest/i.test(v)) return 'LUMPSUM'; // "dividend reinvestment" buys units with the payout
-  if (/dividend|\bdiv\b|payout|idcw|income\s*distribution/i.test(v)) return 'DIVIDEND';
+  if (/dividend|\bdiv\b|payout|idcw|income\s*distribution|interest|survival|money[\s-]*back/i.test(v)) return 'DIVIDEND';
   if (/bonus|\bfree\b|split|\bgift/i.test(v)) return 'BONUS';
   if (/charge|\bfee|maintenance|deduct/i.test(v)) return 'CHARGE';
-  if (/redeem|redemption|\bsell\b|\bsold\b|switch[\s-]*out|\bswp\b|withdraw|^\s*s\s*$/i.test(v)) return 'REDEMPTION';
+  if (/redeem|redemption|\bsell\b|\bsold\b|switch[\s-]*out|\bswp\b|withdraw|closure|closed|premature|encash|matured|surrender|^\s*s\s*$/i.test(v)) return 'REDEMPTION';
   if (/\bsip\b|systematic|contribution/i.test(v)) return 'SIP';
   if (/lump|purchase|buy|bought|one[\s-]?time|additional|switch|^\s*b\s*$/i.test(v)) return 'LUMPSUM';
   return fallback;
@@ -419,7 +420,10 @@ function expandNps(out, legs, amt, typeGiven, fail, money) {
  * existing: the holding's current transactions, used to flag duplicates.
  * Each candidate carries `index` (its source row), `scheme` (NPS) and, when split, `part` / `parts`.
  */
-export function buildRows(rows, map, { defaultType = 'SIP', defaultFolio = '', existing = [], splitFolios: split = true, currency = 'INR' } = {}) {
+/** Today's date in the browser's own calendar (ISO), for telling future-dated rows apart. */
+const localToday = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`; };
+
+export function buildRows(rows, map, { defaultType = 'SIP', defaultFolio = '', existing = [], splitFolios: split = true, currency = 'INR', kind = 'MF', today = localToday() } = {}) {
   const col = (field) => map.indexOf(field);
   const money = (n) => (currency === 'INR' ? `₹${n.toLocaleString('en-IN')}` : `${n.toLocaleString('en-US')} ${currency}`);
   const ci = { folio: col('folio'), name: col('name'), type: col('type'), date: col('date'), amount: col('amount'), units: col('units'), nav: col('nav'), notes: col('notes') };
@@ -432,6 +436,16 @@ export function buildRows(rows, map, { defaultType = 'SIP', defaultFolio = '', e
     const out = { index, folio: get('folio') || defaultFolio, name: get('name'), scheme: '', type: parseType(get('type'), defaultType), notes: String(get('notes')).trim(), date: null, amount: null, units: null, nav: null, status: 'ok', message: '' };
 
     const fail = (msg) => { out.status = 'error'; out.message = msg; return [out]; };
+    // A fixed deposit sheet's "Final Value at maturity" line is not a transaction either: it carries the maturity
+    // date and value, which the deposit's import can record as its terms.
+    if ((kind === 'FD' || kind === 'INS') && ['type', 'name'].some((f) => /\bmaturity\b|^\s*final\s*value/i.test(String(get(f))))) {
+      out.status = 'maturity';
+      out.message = 'Maturity line';
+      out.date = ci.date >= 0 ? parseDate(get('date')) : null;
+      const mv = ci.amount >= 0 ? parseNumber(get('amount')) : null;
+      out.amount = mv === null ? null : round2(Math.abs(mv));
+      return [out];
+    }
     // A sheet's summary line ("Current Value | 6-Nov-2026 | 169980 | 20 | 8,499") is not a transaction; it carries
     // the price on that date, which a gold bond's import can record as the gold price.
     if (['name', 'type', 'folio'].some((f) => /^\s*(current|market|total)\s*value\s*$/i.test(String(get(f))))) {
@@ -446,6 +460,15 @@ export function buildRows(rows, map, { defaultType = 'SIP', defaultFolio = '', e
 
     out.date = parseDate(get('date'));
     if (!out.date) return fail(`Unrecognised date "${get('date')}"`);
+    // A row dated after today has not happened yet: an insurance sheet lists the premiums still to come, which set
+    // the policy's schedule but are not transactions; anything else dated in the future is simply skipped.
+    if (out.date > today) {
+      out.status = 'future';
+      out.message = kind === 'INS' ? `Future premium · due ${out.date}` : 'Dated in the future';
+      const fa = ci.amount >= 0 ? parseNumber(get('amount')) : null;
+      out.amount = fa === null ? null : round2(Math.abs(fa));
+      return [out];
+    }
     const typeGiven = ci.type >= 0 && get('type') !== '' && parseType(get('type'), '') !== '';
 
     if (npsCols.length) {

@@ -14,6 +14,8 @@ export function themeTokens() {
     series4: cssVar('--series-4'),
     series5: cssVar('--series-5'),
     series6: cssVar('--series-6'),
+    series7: cssVar('--series-7'),
+    series8: cssVar('--series-8'),
     grid: cssVar('--grid'),
     axis: cssVar('--axis'),
     muted: cssVar('--text-muted'),
@@ -26,7 +28,7 @@ export function themeTokens() {
 /** The categorical colours in their fixed order (slot 1 = first asset class, and so on). */
 export function seriesColors() {
   const t = themeTokens();
-  return [t.series1, t.series2, t.series3, t.series4, t.series5, t.series6];
+  return [t.series1, t.series2, t.series3, t.series4, t.series5, t.series6, t.series7, t.series8];
 }
 
 /** Vertical hairline at the hovered index (crosshair). */

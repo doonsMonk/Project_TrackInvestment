@@ -18,6 +18,8 @@
   --series-4: #eda100;
   --series-5: #e87ba4;
   --series-6: #008300;
+  --series-7: #b35c9a;
+  --series-8: #5b6ee1;
   --good: #006300;
   --bad: #d03b3b;
   --warn-bg: #fff4d6;
@@ -52,6 +54,8 @@
     --series-4: #c98500;
     --series-5: #d55181;
     --series-6: #008300;
+    --series-7: #b8679f;
+    --series-8: #6f84ea;
     --good: #0ca30c;
     --bad: #e66767;
     --warn-bg: #3a2e0a;
@@ -81,6 +85,8 @@
   --series-4: #c98500;
   --series-5: #d55181;
   --series-6: #008300;
+  --series-7: #b8679f;
+  --series-8: #6f84ea;
   --good: #0ca30c;
   --bad: #e66767;
   --warn-bg: #3a2e0a;
@@ -306,6 +312,8 @@ h1 .badge { font-size: 0.8rem; margin-left: 8px; position: relative; top: -3px; 
 .chip.kind.epf { background: color-mix(in srgb, var(--series-4) 18%, transparent); color: var(--warn-ink); }
 .chip.kind.ppf { background: color-mix(in srgb, var(--series-5) 16%, transparent); color: color-mix(in srgb, var(--series-5) 60%, var(--text-primary)); }
 .chip.kind.gold { background: color-mix(in srgb, var(--series-6) 14%, transparent); color: color-mix(in srgb, var(--series-6) 75%, var(--text-primary)); }
+.chip.kind.fd { background: color-mix(in srgb, var(--series-7) 14%, transparent); color: color-mix(in srgb, var(--series-7) 70%, var(--text-primary)); }
+.chip.kind.ins { background: color-mix(in srgb, var(--series-8) 14%, transparent); color: color-mix(in srgb, var(--series-8) 75%, var(--text-primary)); }
 .scheme-nav { display: inline-flex; align-items: baseline; gap: 5px; margin-right: 12px; font-size: 1.1rem; }
 .scheme-nav .chip { font-size: 0.7rem; position: relative; top: -2px; }
 .sub-amount { color: var(--text-muted); font-size: 0.78rem; font-weight: 400; }
