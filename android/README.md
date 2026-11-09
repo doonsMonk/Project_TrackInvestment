@@ -40,6 +40,27 @@ The vault is one file. Copy it between devices deliberately, and keep only one d
 
 The file is encrypted with your password before it is written, so a cloud folder only ever holds ciphertext.
 
+## Fingerprint / screen-lock unlock
+
+`MainActivity` keeps the vault password encrypted with an AES-GCM key from the Android Keystore that requires user
+authentication for every use (`BIOMETRIC_STRONG` or `DEVICE_CREDENTIAL` on Android 11+, biometrics only below)
+and is invalidated when fingerprints are enrolled. The page's lock screen calls `AndroidApp.enableBiometric` (one
+prompt, then the ciphertext goes to the app's private preferences) and `AndroidApp.biometricUnlock` (prompt,
+decrypt, POST to the backend's `/api/auth/unlock` from Kotlin, then `window.onBiometric('unlocked')`). Needs
+`androidx.biometric`. Nothing is written to the vault file.
+
+## Files from the page
+
+`<input type="file">` (the CAS statement PDF) works because `MainActivity` implements `WebChromeClient.onShowFileChooser`
+with the system document picker; the page reads the file itself and sends it to the backend inside the app. pdfminer.six
+is a pure-Python package, so the same parser runs on the phone.
+
+## Printing
+
+The page's Print button calls `AndroidApp.print()`, a JavaScript interface on the WebView that hands the current
+page to Android's print framework (`PrintManager` with the WebView's own print adapter). The system print dialog
+offers any printer and Save as PDF; the page's print stylesheet applies.
+
 ## Testing on a phone over Wi-Fi
 
 When the PC's USB ports are blocked, Android 11+ can be debugged over Wi-Fi (phone and PC on the same network):

@@ -14,4 +14,8 @@
     <string name="replace">Replace</string>
     <string name="cancel">Cancel</string>
     <string name="about_body">Investment Tracker %1$s\n\nThe same app as on the PC: the backend runs inside this app and the data stays in one encrypted file, portfolio.enc, in the app\'s private storage.\n\nTo use the same data on the PC and the phone, copy the file: Save vault as… here, Open vault file… on the other device (on the PC, put it in the data folder). Keep only one device open at a time.</string>
+    <string name="bio_enable_title">Turn on fingerprint unlock</string>
+    <string name="bio_enable_sub">Confirm with your fingerprint or screen lock</string>
+    <string name="bio_unlock_title">Unlock Investment Tracker</string>
+    <string name="bio_unlock_sub">Fingerprint or screen lock</string>
 </resources>

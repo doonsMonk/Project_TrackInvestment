@@ -7,3 +7,4 @@
 
 pyinstaller>=6.16   # bundles launcher.py + backend + frontend into a single exe (6.16+ supports Python 3.14)
 pillow>=10          # only used by tools/make_icon.py to generate assets/icon.ico
+pdfminer.six>=20240706

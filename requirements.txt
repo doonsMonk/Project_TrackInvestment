@@ -9,3 +9,4 @@ truststore>=0.9         # verify HTTPS with the Windows certificate store (NPS T
 
 # Everything else used by the app is in Python's standard library (sqlite3, urllib, datetime).
 # Chart.js for the UI is bundled under frontend/vendor, so no Node.js or npm is needed.
+pdfminer.six>=20240706

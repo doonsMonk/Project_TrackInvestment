@@ -8,13 +8,15 @@ import { fmtMoney, fmtINR, fmtPct, fmtNum, fmtDate, esc, todayISO, isNum } from 
 import { openModal, closeModal, toast, confirmDialog } from './ui.js';
 import { openImportModal } from './import.js';
 import { splitFolios, distribute, fyLabel } from './parse.js';
+import { openPrintModal, renderPrintPage } from './print.js';
+import { openCasImportModal } from './cas.js';
 
 const app = document.getElementById('app');
 const RANGES = { '1M': 1, '3M': 3, '6M': 6, '1Y': 12, '3Y': 36, All: null };
 
 // Kind-specific vocabulary: a mutual fund has folios, NAVs and units; a stock has accounts, prices and shares.
 const MOVE_TYPES = { SWITCH_IN: 'Switch in', SWITCH_OUT: 'Switch out', CHARGE: 'Charges' };
-const KINDS = {
+export const KINDS = {
   MF: { key: 'MF', label: 'Mutual fund', lower: 'mutual fund', plural: 'Mutual funds', price: 'NAV', folio: 'Folio', folioPlural: 'folios', unit: 'units', priceDecimals: 4,
         types: { SIP: 'SIP', LUMPSUM: 'Lumpsum', REDEMPTION: 'Redemption', DIVIDEND: 'Dividend', BONUS: 'Bonus units', ...MOVE_TYPES }, sold: 'redeemed' },
   STOCK: { key: 'STOCK', label: 'Stock', lower: 'stock', plural: 'Stocks', price: 'Price', folio: 'Account', folioPlural: 'accounts', unit: 'shares', priceDecimals: 2,
@@ -49,7 +51,7 @@ const CHIP_CLASS = { REDEMPTION: ' redemption', DIVIDEND: ' dividend', BONUS: ' 
 const kindOf = (f) => KINDS[f?.kind] || KINDS.MF;
 const SCHEME_NAMES = { E: 'Equity', C: 'Corporate bonds', G: 'Government securities', A: 'Alternative assets' };
 // Asset classes for the allocation ring, in a fixed order so each keeps its colour as classes are added.
-const ASSET_CLASSES = [
+export const ASSET_CLASSES = [
   { kind: 'MF', label: 'Mutual funds', one: 'fund', many: 'funds' },
   { kind: 'STOCK', label: 'Stocks', one: 'stock', many: 'stocks' },
   { kind: 'NPS', label: 'NPS', one: 'account', many: 'accounts' },
@@ -372,9 +374,7 @@ async function renderPortfolio() {
     const foreign = Boolean(f.needs_fx);
     const bs = foreign ? f.base?.summary : s; // figures in the base currency (undefined when no exchange rate yet)
     const folioText = f.folio_count > 1 ? `${f.folio_count} ${k.folioPlural}` : f.folio_number ? `${k.folio} ${f.folio_number}` : '';
-    const what = f.kind === 'STOCK'
-      ? [f.symbol, f.exchange, cur].filter(Boolean).join(' · ')
-      : f.kind === 'NPS'
+    const what = f.kind === 'NPS'
         ? ['NPS', f.details?.pfm, f.details?.tier ? `Tier ${f.details.tier}` : '', f.schemes?.length ? `Schemes ${f.schemes.map((p) => p.scheme).join(' / ')}` : ''].filter(Boolean).join(' · ')
         : f.kind === 'EPF'
           ? ['EPF', f.details?.employer, f.epf?.pending_interest_fy ? `interest for FY ${f.epf.pending_interest_fy} pending` : ''].filter(Boolean).join(' · ')
@@ -384,9 +384,11 @@ async function renderPortfolio() {
             ? ['Fixed deposit', f.details?.bank, fdMaturityText(f.fd), f.fd?.has_terms || f.closed ? '' : 'maturity not set'].filter(Boolean).join(' · ')
           : f.kind === 'INS'
             ? ['Insurance policy', f.details?.insurer, f.details?.plan, fdMaturityText(f.policy), f.closed ? '' : f.policy?.overdue ? `${f.policy.overdue} premium${f.policy.overdue === 1 ? '' : 's'} due` : f.policy?.next_due ? `next premium ${fmtDate(f.policy.next_due)}` : '', f.policy?.has_terms || f.closed ? '' : 'maturity not set'].filter(Boolean).join(' · ')
+          : f.kind === 'STOCK'
+            ? [f.symbol, f.exchange, cur, f.sips?.pending?.length ? `${f.sips.pending.length} SIP instalment${f.sips.pending.length === 1 ? '' : 's'} due` : ''].filter(Boolean).join(' · ')
           : f.kind === 'PPF'
             ? ['PPF', f.details?.bank, ppfMaturityText(f.ppf), f.ppf?.pending_interest_fy ? `interest for FY ${f.ppf.pending_interest_fy} pending` : ''].filter(Boolean).join(' · ')
-            : f.scheme?.scheme_category;
+            : [f.scheme?.scheme_category, f.sips?.pending?.length ? `${f.sips.pending.length} SIP instalment${f.sips.pending.length === 1 ? '' : 's'} due` : ''].filter(Boolean).join(' · ');
     const sub = [what, folioText].filter(Boolean).join(' · ');
     const native = (v) => (foreign ? `<div class="sub-amount">${fmtMoney(v, cur)}</div>` : '');
     const nameCell = `<td><div class="fund-name">${anyStock ? kindChip(f) : ''}${esc(f.name)}</div><div class="muted small">${esc(sub)}</div></td>`;
@@ -484,6 +486,7 @@ async function renderPortfolio() {
   const alloc = allocationParts(t);
   app.innerHTML = `
     ${navErrorBanner(data.nav_errors)}
+    ${dueBanner(data.funds)}
     ${unconverted.length ? `<div class="banner warn">No exchange rate yet for ${esc(unconverted.join(', '))}, so ${unconverted.length === 1 ? 'it is' : 'they are'} left out of the totals below. Click <b>Refresh prices</b> when you are online.</div>` : ''}
     <div class="page-head">
       <h1>Portfolio</h1>
@@ -518,7 +521,7 @@ async function renderPortfolio() {
       </div>
     </section>
     <section class="card">
-      <div class="card-head"><div class="filter-bar"><h2>Holdings</h2>${tabs}</div><button type="button" class="btn primary small" id="btn-add-fund-inline">+ Add fund / stock</button></div>
+      <div class="card-head"><div class="filter-bar"><h2>Holdings</h2>${tabs}</div><div class="head-actions"><button type="button" class="btn ghost small" id="btn-import-cas" title="Read a CAMS / KFintech consolidated account statement PDF: every mutual fund transaction in one go">Import CAS…</button><button type="button" class="btn primary small" id="btn-add-fund-inline">+ Add fund / stock</button></div></div>
       <div class="table-wrap" id="holdings-active" ${tab === 'active' ? '' : 'hidden'}>
         ${activeFunds.length ? `
         <table class="data holdings">
@@ -813,6 +816,131 @@ function mountYearChart(f, share, currency) {
         { label: 'Interest credited', data: years.map((y) => (share === 'ER' ? 0 : y.interest_ee) + (share === 'EE' ? 0 : y.interest_er)), color: t.series3, placeholder },
       ].filter(Boolean);
   state.yearChart = stackedColumns(canvas, years.map((y) => `FY ${y.fy}`), series, { currency, totalLabel: 'Year total' });
+}
+
+/** What is due and not yet recorded across the portfolio: SIP instalments, premiums, payouts. */
+function dueBanner(funds) {
+  const items = [];
+  for (const f of funds || []) {
+    if (f.closed) continue;
+    const n = f.sips?.pending?.length || 0;
+    if (n) items.push(`<a href="#/fund/${f.id}">${esc(f.name)}</a>: ${n} SIP instalment${n === 1 ? '' : 's'} (${fmtINR(f.sips.pending_total)})`);
+    if (f.policy?.overdue) items.push(`<a href="#/fund/${f.id}">${esc(f.name)}</a>: ${f.policy.overdue} premium${f.policy.overdue === 1 ? '' : 's'}`);
+    if (f.fd?.awaiting_payout) items.push(`<a href="#/fund/${f.id}">${esc(f.name)}</a>: deposit matured, payout to record`);
+    if (f.policy?.awaiting_payout) items.push(`<a href="#/fund/${f.id}">${esc(f.name)}</a>: policy matured, payout to record`);
+  }
+  if (!items.length) return '';
+  return `<div class="banner due-banner"><b>Due, not yet recorded:</b> ${items.join(' · ')}. Open the holding to record ${items.length === 1 ? 'it' : 'them'}.</div>`;
+}
+
+const SCHEDULE_NOTE = 'SIP instalment · from the schedule';
+const ordinal = (d) => `${d}${[11, 12, 13].includes(d % 100) ? 'th' : ['th', 'st', 'nd', 'rd'][Math.min(d % 10, 4)] || 'th'}`;
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const monthOf = (iso) => `${MONTH_NAMES[Number(iso.slice(5, 7)) - 1]} ${iso.slice(0, 4)}`;
+
+/** The holding's SIP schedules: PUT the fund with the new list in its details. */
+async function saveSips(f, sips) {
+  return api.put(`/api/funds/${f.id}`, {
+    name: f.name, kind: f.kind, scheme_code: f.scheme_code ?? null, symbol: f.symbol ?? null, folio_number: f.folio_number || '',
+    locked: Boolean(f.locked), lock_in_until: f.lock_in_until || null, notes: f.notes || '', details: sips.length ? { sips } : null,
+  });
+}
+
+/** Mutual fund / stock: the SIP schedules, what each has covered, and the instalments still to record. */
+function sipCard(f, cur) {
+  const s = f.sips || { schedules: [], pending: [] };
+  const M = (v) => fmtMoney(v, cur);
+  const rows = s.schedules.map((sch) => {
+    const pend = s.pending.filter((p) => p.index === sch.index);
+    return `
+      <tr${sch.paused ? ' class="muted"' : ''}>
+        <td><b>${M(sch.amount)}</b> on the ${ordinal(sch.day)}, ${sch.every}${sch.paused ? ' · paused' : ''}<div class="muted small">since ${monthOf(sch.start)}${sch.end ? ` until ${monthOf(sch.end)}` : ''}${sch.folio ? ` · ${esc(f.kind === 'STOCK' ? 'account' : 'folio')} ${esc(sch.folio)}` : ''}</div></td>
+        <td class="num">${sch.paid}<div class="muted small">recorded</div></td>
+        <td>${pend.length ? `<span class="danger-text">${pend.length} due</span><div class="muted small">${pend.slice(0, 3).map((p) => fmtDate(p.date)).join(', ')}${pend.length > 3 ? '…' : ''}</div>` : sch.next_due ? `next ${fmtDate(sch.next_due)}` : sch.paused ? '–' : 'up to date'}</td>
+        <td class="row-actions">
+          ${pend.length ? `<button type="button" class="btn ghost small" data-sip-record="${sch.index}|${pend.length === 1 ? pend[0].date : 'all'}" title="Record ${pend.length === 1 ? 'this instalment' : 'every due instalment'} at the ${f.kind === 'STOCK' ? 'price' : 'NAV'} of the due date; a CAS import later replaces it with the exact figures">Record ${pend.length === 1 ? 'it' : `all ${pend.length}`}</button>` : ''}
+          <button type="button" class="link-btn" data-sip-edit="${sch.index}">Edit</button><button type="button" class="link-btn danger-text" data-sip-delete="${sch.index}">Remove</button>
+        </td>
+      </tr>`;
+  }).join('');
+  return `
+    <section class="card">
+      <div class="card-head"><h2>SIP schedule</h2><div class="head-actions">${s.monthly ? `<span class="muted small">${M(s.monthly)} a month</span>` : ''}<button type="button" class="btn ghost small" id="btn-sip-add">+ Add SIP</button></div></div>
+      ${rows ? `<div class="table-wrap"><table class="data sip-table"><thead><tr><th>Schedule</th><th class="num">Instalments</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<p class="empty small">No schedule yet. Add the SIP's amount and day, and the app will tell you when an instalment is due and not yet recorded, and can record it in one click; a CAS import later brings in the exact units and ${f.kind === 'STOCK' ? 'price' : 'NAV'}.</p>`}
+    </section>`;
+}
+
+/** Add or edit one SIP schedule of a holding. */
+function openSipModal(f, index) {
+  const sips = (f.details?.sips || []).map((x) => ({ ...x }));
+  const cur = f.currency || BASE;
+  const editing = index !== null && index !== undefined && sips[index];
+  const sch = editing ? sips[index] : { amount: '', day: 10, every: 'monthly', start: todayISO().slice(0, 8) + '01', end: '', folio: f.folio_number || '', paused: false };
+  const folios = (f.folios || []).map((x) => x.folio).filter((x) => x && x !== NO_FOLIO);
+  const modal = openModal(`${editing ? 'Edit' : 'Add'} SIP · ${esc(f.name)}`, `
+  <form id="txn-form" class="form" novalidate>
+    <div class="form-row">
+      <label class="field">Amount per instalment (${esc(cur)})
+        <input type="number" name="amount" min="0" step="0.01" value="${sch.amount}" placeholder="e.g. 5000" required>
+      </label>
+      <label class="field">Day of the month
+        <input type="number" name="day" min="1" max="28" step="1" value="${sch.day}" required>
+        <span class="hint">1 to 28, the date the money leaves your account.</span>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">Every
+        <select name="every"><option value="monthly" ${sch.every === 'monthly' ? 'selected' : ''}>Month</option><option value="quarterly" ${sch.every === 'quarterly' ? 'selected' : ''}>Quarter</option></select>
+      </label>
+      <label class="field">${f.kind === 'STOCK' ? 'Account' : 'Folio'} (optional)
+        <input name="folio" value="${esc(sch.folio || '')}" list="sip-folios" placeholder="${f.kind === 'STOCK' ? 'e.g. Zerodha' : 'the folio the SIP runs in'}">
+        <datalist id="sip-folios">${folios.map((x) => `<option value="${esc(x)}">`).join('')}</datalist>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">First instalment from
+        <input type="date" name="start" value="${esc(sch.start || '')}" required>
+        <span class="hint">Instalments before this date are not expected. Recorded purchases within a few days of a due date count as that instalment.</span>
+      </label>
+      <label class="field">Last instalment (optional)
+        <input type="date" name="end" value="${esc(sch.end || '')}">
+      </label>
+    </div>
+    ${editing ? '<label class="check"><input type="checkbox" name="paused" ' + (sch.paused ? 'checked' : '') + '> Paused: nothing is expected until it is resumed</label>' : ''}
+    <div class="form-error" id="txn-form-error" hidden></div>
+    <div class="form-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">${editing ? 'Save changes' : 'Add SIP'}</button>
+    </div>
+  </form>`);
+  const form = modal.querySelector('#txn-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = modal.querySelector('#txn-form-error');
+    err.hidden = true;
+    const fail = (msg) => { err.textContent = msg; err.hidden = false; };
+    const entry = {
+      amount: parseFloat(form.elements.amount.value) || 0, day: parseInt(form.elements.day.value, 10) || 0, every: form.elements.every.value,
+      start: form.elements.start.value, end: form.elements.end.value || null, folio: form.elements.folio.value.trim(), paused: Boolean(form.elements.paused?.checked),
+    };
+    if (!(entry.amount > 0)) return fail('Enter the amount.');
+    if (!(entry.day >= 1 && entry.day <= 28)) return fail('The day must be between 1 and 28.');
+    if (!entry.start) return fail('Pick the date of the first instalment.');
+    if (entry.end && entry.end < entry.start) return fail('The last instalment cannot be before the first.');
+    if (editing) sips[index] = entry; else sips.push(entry);
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      await saveSips(f, sips);
+      closeModal();
+      toast(editing ? 'SIP schedule updated' : 'SIP schedule added');
+      render();
+    } catch (e2) {
+      fail(e2.message);
+      btn.disabled = false;
+    }
+  });
 }
 
 /** Fixed deposit: the four headline tiles. */
@@ -1297,6 +1425,7 @@ async function renderFund(id, folioKey, schemeKey) {
         ${gold ? '<button type="button" class="btn ghost small" id="btn-gold-price" title="Enter today\'s gold price per gram; it values every gold bond">Gold price</button>' : ''}
         ${ins && !f.closed && (f.policy?.premium || f.policy?.next_due) ? '<button type="button" class="btn ghost small" id="btn-ins-premium" title="Record the premium that fell due (date and amount pre-filled from the schedule)">Premium paid</button>' : ''}
         ${(fdk || ins) && !f.closed && s.units > 0 ? `<button type="button" class="btn ghost small" id="btn-fd-payout" title="Record the maturity payout or ${ins ? 'a surrender' : 'a premature closure'}; the ${k.lower} then moves to Closed">Matured / paid out</button>` : ''}
+        <button type="button" class="btn ghost small" id="btn-print-fund" title="Print this ${k.lower} or save it as a PDF">Print</button>
         <button type="button" class="btn ghost small" id="btn-edit-fund">Edit ${k.lower}</button>
         <button type="button" class="btn ghost small danger-text" id="btn-delete-fund">Delete</button>
       </div>
@@ -1319,6 +1448,7 @@ async function renderFund(id, folioKey, schemeKey) {
     </section>
     ${nps ? schemeTable(f, schemeKey, cur) : epf ? epfYearTable(f, cur) : ppf ? ppfYearTable(f, cur) : folioTable(f, folioKey, k, cur)}
     ${gold ? goldCard(f, cur) : fdk ? fdCard(f, cur) : ins ? insCard(f, cur) : ''}
+    ${(k.key === 'MF' || stock) && !f.closed ? sipCard(f, cur) : ''}
     ${(epf && f.epf?.years?.length) || (ppf && f.ppf?.years?.length) ? `<section class="card chart-card">
       <div class="card-head"><h2>Deposits and interest by year${scope}</h2><span class="muted small">one column per financial year: ${epf ? 'employee deposits, employer deposits' : 'deposits'} and the interest credited for that year</span></div>
       <div class="chart-wrap short"><canvas id="year-chart" role="img" aria-label="${epf ? 'Employee deposits, employer deposits' : 'Deposits'} and interest credited per financial year for ${esc(f.name)}${activeScheme ? `, ${esc(activeScheme.name)}` : ''}"></canvas></div>
@@ -1377,7 +1507,34 @@ async function renderFund(id, folioKey, schemeKey) {
   }));
   document.getElementById('btn-exit')?.addEventListener('click', () => openTxnModal(fundForForms, null, { exitUnits: s.units, folios: folios.length, scoped: Boolean(active), scheme: activeScheme?.scheme || '' }));
   document.getElementById('btn-import-txn').addEventListener('click', () => openImportModal(fundForForms, render));
+  document.getElementById('btn-sip-add')?.addEventListener('click', () => openSipModal(f, null));
+  app.querySelectorAll('[data-sip-edit]').forEach((b) => b.addEventListener('click', () => openSipModal(f, Number(b.dataset.sipEdit))));
+  app.querySelectorAll('[data-sip-delete]').forEach((b) => b.addEventListener('click', async () => {
+    const i = Number(b.dataset.sipDelete);
+    const sch = f.sips?.schedules?.[i];
+    if (!sch) return;
+    const ok = await confirmDialog('Remove this SIP schedule?', `${M(sch.amount)} on the ${ordinal(sch.day)} ${sch.every} will no longer be expected. Recorded instalments stay.`, { confirmLabel: 'Remove' });
+    if (!ok) return;
+    try { await saveSips(f, (f.details?.sips || []).filter((_, j) => j !== i)); toast('SIP schedule removed'); render(); } catch (err) { toast(`Could not save: ${err.message}`, 'error'); }
+  }));
+  app.querySelectorAll('[data-sip-record]').forEach((b) => b.addEventListener('click', async () => {
+    const [idx, date] = b.dataset.sipRecord.split('|');
+    const sch = f.sips?.schedules?.[Number(idx)];
+    if (!sch) return;
+    const items = (date === 'all' ? f.sips.pending.filter((p) => p.index === Number(idx)) : [{ date, amount: sch.amount, folio: sch.folio }])
+      .map((p) => ({ date: p.date, folio_number: p.folio || f.folio_number || '', scheme: '', type: 'SIP', amount: p.amount, notes: SCHEDULE_NOTE }));
+    b.disabled = true;
+    try {
+      const res = await api.post(`/api/funds/${f.id}/transactions/bulk`, { transactions: items });
+      toast(`${res.created} SIP instalment${res.created === 1 ? '' : 's'} recorded at the ${k.price} of the due date`);
+      render();
+    } catch (err) {
+      toast(`Could not record: ${err.message}`, 'error');
+      b.disabled = false;
+    }
+  }));
   document.getElementById('btn-edit-fund').addEventListener('click', () => openFundModal(f));
+  document.getElementById('btn-print-fund').addEventListener('click', () => openPrintModal({ fundId: f.id }));
   document.getElementById('btn-delete-fund').addEventListener('click', async () => {
     const ok = await confirmDialog(`Delete ${k.lower}?`, `This removes <b>${esc(f.name)}</b> and all ${f.transactions.length} of its transactions. This cannot be undone.`);
     if (!ok) return;
@@ -2034,7 +2191,7 @@ async function openFundModal(existing) {
       kind,
       scheme_code: kind === 'MF' ? Number(fd.get('scheme_code')) || null : null,
       symbol: stock ? String(fd.get('symbol')).trim().toUpperCase() : null,
-      details: null,
+      details: (kind === 'MF' || kind === 'STOCK') && existingDetails?.sips?.length ? { sips: existingDetails.sips } : null,
       folio_number: String(fd.get('folio_number')).trim(),
       locked: fd.get('locked') === '1',
       lock_in_until: fd.get('lock_in_until') || null,
@@ -2730,9 +2887,28 @@ const SHIELD_ICON =
 let locked = false;
 let authInfo = { min_password_length: 8, idle_lock_minutes: 30 };
 
+// ---- fingerprint / screen-lock unlock: only the Android app offers window.AndroidApp; the password is kept there,
+// protected by the device's own lock, and the page only ever asks for a prompt.
+const droid = () => (window.AndroidApp && typeof window.AndroidApp.biometricUnlock === 'function' ? window.AndroidApp : null);
+const bioAvailable = () => { try { return Boolean(droid()?.biometricAvailable()); } catch { return false; } };
+const bioEnabled = () => { try { return Boolean(droid()?.biometricEnabled()); } catch { return false; } };
+const bioEnable = (password) => { try { droid()?.enableBiometric(password); } catch (e) { toast(`Fingerprint unlock could not be turned on: ${e.message}`, 'error'); } };
+let bioPrompted = false; // one automatic prompt per lock screen; the button can always ask again
+window.onBiometric = (kind, detail) => {
+  if (kind === 'unlocked') { boot(); return; }
+  if (kind === 'enabled') { toast('Fingerprint unlock is on: next time a fingerprint or your screen lock opens the app'); return; }
+  if (kind === 'cancelled') { document.querySelector('#unlock-form input[name="password"]')?.focus(); return; }
+  if (kind === 'disabled') toast('Fingerprint unlock is off');
+  else if (kind === 'stale') toast('The password kept for fingerprint unlock no longer matches, so fingerprint unlock was turned off. Type the password and tick the box to turn it on again.', 'warn');
+  else if (kind === 'invalidated') toast('The fingerprints or screen lock on this device changed, so fingerprint unlock was turned off. Type the password and tick the box to turn it on again.', 'warn');
+  else if (kind === 'failed') toast(`Fingerprint unlock failed: ${detail || 'unknown error'}`, 'error');
+  if (locked && document.getElementById('unlock-form')) renderLock();
+};
+
 function setLocked(isLocked) {
   locked = isLocked;
   document.body.classList.toggle('locked', isLocked);
+  if (!isLocked) bioPrompted = false;
 }
 
 /** Route to the normal app, the unlock screen or the first-run password setup, based on vault state. */
@@ -2768,14 +2944,16 @@ function renderLock() {
       <h1>Unlock your portfolio</h1>
       <p class="muted">Your data is encrypted on this ${DEVICE}. Enter your password to open it.</p>
       ${authInfo.notice?.message ? `<div class="banner warn" style="text-align:left">${esc(authInfo.notice.message)}</div>` : ''}
+      ${bioEnabled() ? '<div class="bio-unlock"><button type="button" class="btn primary" id="btn-bio-unlock">Unlock with fingerprint or screen lock</button><p class="muted small">or type your password</p></div>' : ''}
       <form id="unlock-form" class="form" novalidate>
         <label class="field">Password
           <input type="password" name="password" autocomplete="current-password" required>
         </label>
+        ${bioAvailable() && !bioEnabled() ? '<label class="check"><input type="checkbox" name="remember_bio"> Unlock with a fingerprint or the screen lock from next time</label>' : ''}
         <div class="form-error" id="auth-error" hidden></div>
         <div class="form-actions"><button type="submit" class="btn primary">Unlock</button></div>
       </form>
-      <p class="footnote">There is no password recovery. If the password is lost, the data cannot be opened.${idle ? ` The app locks itself after ${idle} minutes without use.` : ''}${authInfo.version ? ` Version ${authInfo.version}.` : ''}</p>
+      <p class="footnote">There is no password recovery. If the password is lost, the data cannot be opened.${idle ? ` The app locks itself after ${idle} minutes without use.` : ''}${authInfo.version ? ` Version ${authInfo.version}.` : ''}${bioEnabled() ? ' <button type="button" class="link-btn" id="btn-bio-off">Turn off fingerprint unlock</button>' : ''}</p>
       ${dataFolderLine()}
     </section>`;
   const form = document.getElementById('unlock-form');
@@ -2784,6 +2962,9 @@ function renderLock() {
   document.getElementById('btn-cloud-lock')?.addEventListener('click', openCloudModal);
   cloudHint();
   form.elements.password.focus();
+  document.getElementById('btn-bio-unlock')?.addEventListener('click', () => droid()?.biometricUnlock());
+  document.getElementById('btn-bio-off')?.addEventListener('click', () => droid()?.disableBiometric());
+  if (bioEnabled() && !bioPrompted) { bioPrompted = true; setTimeout(() => droid()?.biometricUnlock(), 400); }
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     err.hidden = true;
@@ -2792,6 +2973,7 @@ function renderLock() {
     btn.textContent = 'Unlocking…';
     try {
       await api.post('/api/auth/unlock', { password: form.elements.password.value });
+      if (form.elements.remember_bio?.checked) bioEnable(form.elements.password.value);
       applyAuth({ state: 'unlocked' });
     } catch (e2) {
       err.textContent = e2.message;
@@ -3000,6 +3182,7 @@ function renderSetup() {
           <input type="password" name="confirm" autocomplete="new-password" required>
         </label>
         <label class="check warn-check"><input type="checkbox" name="ack" required> I understand that if I forget this password my data cannot be recovered. There is no reset.</label>
+        ${bioAvailable() ? '<label class="check"><input type="checkbox" name="remember_bio"> Unlock with a fingerprint or the screen lock from next time</label>' : ''}
         <div class="form-error" id="auth-error" hidden></div>
         <div class="form-actions"><button type="submit" class="btn primary">Set password and continue</button></div>
       </form>
@@ -3024,6 +3207,7 @@ function renderSetup() {
     btn.textContent = 'Encrypting…';
     try {
       const res = await api.post('/api/auth/setup', { password: pw });
+      if (form.elements.remember_bio?.checked) bioEnable(pw);
       toast(res.migrated ? 'Your existing data is now encrypted.' : 'Password set. Your data will be stored encrypted.');
       applyAuth({ state: 'unlocked' });
     } catch (e2) {
@@ -3064,7 +3248,8 @@ function openPasswordModal() {
     try {
       await api.post('/api/auth/change-password', { current: form.elements.current.value, new: next });
       closeModal();
-      toast('Password changed');
+      if (bioEnabled()) { droid()?.disableBiometric(); toast('Password changed. Fingerprint unlock is off because the password changed; tick the box at the next unlock to turn it on again.', 'warn'); }
+      else toast('Password changed');
     } catch (e2) {
       fail(e2.message);
       btn.disabled = false;
@@ -3106,9 +3291,15 @@ async function render() {
   if (locked) return; // the lock / setup screen owns the page until the vault is open
   destroyChart();
   const hash = location.hash || '#/';
+  const isPrint = hash.startsWith('#/print');
+  document.body.classList.toggle('print-view', isPrint);
+  if (isPrint) document.documentElement.dataset.theme = 'light'; // a report prints on white whatever the theme
+  else applyTheme();
   const m = hash.match(/^#\/fund\/(\d+)(?:\?(.*))?$/);
   try {
-    if (m) {
+    if (isPrint) {
+      await renderPrintPage(hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '');
+    } else if (m) {
       const fp = new URLSearchParams(m[2] || '');
       await renderFund(Number(m[1]), fp.get('folio'), fp.get('scheme'));
     } else {
@@ -3128,6 +3319,10 @@ document.getElementById('btn-refresh').addEventListener('click', refreshNav);
 document.getElementById('btn-lock').addEventListener('click', lockNow);
 document.getElementById('btn-password').addEventListener('click', openPasswordModal);
 document.getElementById('btn-cloud').addEventListener('click', openCloudModal);
+document.getElementById('btn-print').addEventListener('click', () => {
+  const m = location.hash.match(/^#\/fund\/(\d+)/);
+  openPrintModal({ fundId: m ? Number(m[1]) : null });
+});
 let bootPending = false;
 window.addEventListener('vault-state', () => {
   // an API call hit a locked (423) or not-yet-set-up (409) vault, e.g. after the idle auto-lock
@@ -3146,6 +3341,7 @@ darkQuery.addEventListener('change', () => {
 });
 document.addEventListener('click', (e) => {
   if (e.target.closest('#btn-add-fund-inline')) openFundModal(null);
+  if (e.target.closest('#btn-import-cas')) openCasImportModal(render);
   if (e.target.closest('[data-action="reload"]')) location.reload();
 });
 window.addEventListener('hashchange', render);

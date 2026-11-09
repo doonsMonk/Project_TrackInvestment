@@ -383,6 +383,10 @@ body.locked .needs-unlock { display: none; }
 .auth-card .form-actions .btn { width: 100%; }
 .auth-card .banner { text-align: left; }
 .auth-card .footnote { overflow-wrap: anywhere; }
+.auth-card .bio-unlock { margin: 0 0 16px; }
+.auth-card .bio-unlock .btn { width: 100%; }
+.auth-card .bio-unlock p { margin: 6px 0 0; }
+.auth-card .form .check { text-align: left; }
 .auth-card .footnote code { overflow-wrap: anywhere; word-break: break-all; }
 .auth-card .footnote { margin-top: 18px; color: var(--text-muted); font-size: 0.8rem; }
 .check.warn-check { align-items: flex-start; }
@@ -530,3 +534,83 @@ tr.status-err td.status { color: var(--bad); }
 .cloud-provider .head { display: flex; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; align-items: baseline; }
 .cloud-provider .cloud-setup { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
 .cloud-provider .banner.small { margin: 8px 0 0; }
+
+/* ------------------------------------------------------------------ print dialog */
+.check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px 14px; }
+.check-grid.narrow { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+.check-grid .check { align-items: flex-start; }
+.check-grid .check input { margin-top: 3px; width: auto; flex: none; } /* not the full-width .field input */
+.check-grid .check > span { flex: 1; }
+.preset-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+
+/* ------------------------------------------------------------------ print view (the #/print route) */
+body.print-view .topbar { display: none; }
+body.print-view main { max-width: 980px; }
+.print-toolbar { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); }
+.print-toolbar .spacer { flex: 1; }
+.print-report { background: #fff; color: #111; padding: 28px 32px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; line-height: 1.4; }
+.print-report .print-app { font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; color: #666; }
+.print-report h1 { font-size: 1.5rem; margin: 2px 0 4px; }
+.print-report h2 { font-size: 1.05rem; margin: 24px 0 8px; padding-bottom: 4px; border-bottom: 1px solid #bbb; break-after: avoid; }
+.print-report h2 .small, .print-report h3 .small { font-weight: 400; }
+.print-report h3 { font-size: 0.95rem; margin: 16px 0 6px; break-after: avoid; }
+.print-report .meta, .print-report .small { color: #666; font-size: 0.78rem; }
+.print-report .print-title { margin-top: 8px; font-size: 0.95rem; font-weight: 600; }
+.print-report table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 4px; }
+.print-report th, .print-report td { padding: 5px 6px; border-bottom: 1px solid #ddd; vertical-align: top; text-align: left; }
+.print-report th { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; color: #555; border-bottom: 1px solid #999; }
+.print-report .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.print-report tfoot td { font-weight: 600; border-top: 1px solid #999; border-bottom: 0; }
+.print-report tr.subhead td { background: #f2f2f2; font-weight: 600; padding: 4px 6px; }
+.print-report tr.overdue td { color: #8a4b00; }
+.print-report .up { color: #0a6b0a; }
+.print-report .down { color: #b02020; }
+.print-report .tiles-print { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+.print-report .tile-print { border: 1px solid #ddd; border-radius: 6px; padding: 8px 10px; }
+.print-report .tile-print .l { font-size: 0.68rem; color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
+.print-report .tile-print .v { font-size: 1.05rem; font-weight: 600; margin-top: 2px; }
+.print-report .tile-print .s { font-size: 0.72rem; color: #666; margin-top: 1px; }
+.print-report .alloc-print { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: center; }
+.print-report .print-ring { width: 200px; height: 200px; }
+.print-report .print-ring img, .print-report .print-chart img { width: 100%; height: auto; display: block; }
+.print-report .print-chart { height: 280px; max-width: 920px; }
+.print-report .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 4px; }
+.print-report .details-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px 24px; }
+.print-report .holding-block { break-inside: avoid; }
+.print-report .txn-block { margin-bottom: 14px; }
+.print-report dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 14px; margin: 0; }
+.print-report dt { color: #555; }
+.print-report dd { margin: 0; overflow-wrap: anywhere; }
+.print-report .print-foot { margin-top: 24px; padding-top: 8px; border-top: 1px solid #ddd; }
+@media (max-width: 640px) {
+  .print-report { padding: 16px 12px; overflow-x: auto; } /* wide tables scroll inside the report, not the page */
+  .print-report table { min-width: 560px; }
+  .print-report .tiles-print, .print-report .details-grid, .print-report .alloc-print { min-width: 0; }
+  .print-report .alloc-print { grid-template-columns: 1fr; }
+  .print-report .print-ring { margin: 0 auto; }
+}
+@media print {
+  @page { margin: 14mm 12mm; }
+  html, body, body.print-view { background: #fff !important; color: #111; }
+  .topbar, .print-toolbar, #toast-root, #modal-root, .banner { display: none !important; }
+  main { max-width: none !important; padding: 0 !important; margin: 0 !important; display: block !important; }
+  .print-report { border: 0; padding: 0; border-radius: 0; font-size: 10.5pt; }
+  .print-report table { break-inside: auto; }
+  .print-report tr { break-inside: avoid; }
+  .print-report thead { display: table-header-group; }
+  .print-report .print-chart { height: auto; }
+  .print-report a { color: inherit; text-decoration: none; }
+}
+
+/* ------------------------------------------------------------------ CAS import */
+.cas-scheme { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; display: grid; gap: 6px; }
+.cas-scheme-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.cas-scheme-head > div { min-width: 0; flex: 1 1 260px; }
+.cas-scheme-head .field { flex: 1 1 280px; }
+.cas-scheme .preview-wrap { max-height: 220px; overflow: auto; }
+
+/* ------------------------------------------------------------------ SIP schedules */
+.due-banner a { font-weight: 600; }
+table.data.sip-table { min-width: 0; }
+table.data.sip-table td { white-space: normal; }
+table.data.sip-table .row-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }

@@ -71,6 +71,7 @@ chaquopy {
             install("uvicorn==0.34.3")
             install("cryptography==42.0.8")
             install("certifi")
+            install("pdfminer.six==20260107")  // CAS statement PDFs; pure Python
         }
         pyc { src = false }
     }
@@ -83,5 +84,6 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.webkit:webkit:1.12.1")
+    implementation("androidx.biometric:biometric:1.1.0")
     implementation("com.google.android.material:material:1.12.0")
 }

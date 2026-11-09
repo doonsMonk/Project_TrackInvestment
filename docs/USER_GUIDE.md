@@ -501,6 +501,20 @@ The same short form (date, type, amount) serves a policy:
   paid is the realised gain. **Matured / paid out** opens this form with the maturity value pre-filled once
   the maturity date has passed, or today's value before it.
 
+### SIP schedules
+
+A mutual fund's or stock's page has a **SIP schedule** card. **+ Add SIP** takes the amount, the day of the month
+the money leaves your account, monthly or quarterly, the first (and optionally last) instalment and the folio.
+From then on the app knows which instalments have fallen due. A recorded purchase within a few days of a due
+date, for the same amount (within one per cent) and folio, counts as that instalment; anything else shows as
+**due** on the card, in the holding's row on the portfolio page, and in a **Due, not yet recorded** banner at
+the top of the portfolio, together with overdue premiums and payouts.
+
+**Record it** (or **Record all**) enters the due instalments as SIP purchases at the NAV of each due date,
+marked as coming from the schedule. When a CAS statement is imported later, its exact entry (date, units,
+NAV) replaces such an instalment instead of being added beside it. **Edit** changes the schedule or pauses it;
+**Remove** forgets it, leaving the recorded instalments as they are.
+
 ### Exiting a holding
 
 Click **Exit** on the holding's page to sell everything you hold in one go. The dialog opens as a sale
@@ -635,6 +649,36 @@ whose page you are on, so paste one fund or stock at a time.
 Click **Import N transactions**. Everything is saved in one go; if any row cannot be completed (for
 example a date before the holding existed, with no price available), nothing is imported and the reason
 is shown. Afterwards you can edit or comment on individual rows as usual.
+
+---
+
+### Importing a CAS statement (all your mutual funds at once)
+
+The registrars CAMS and KFintech will email you a **consolidated account statement** (CAS) covering every
+mutual fund you hold, across fund houses, for any period you choose: on their websites look for *CAS* or
+*mailback statement*, pick the **detailed** statement (the summary one has no transactions), give your
+email and PAN and choose a password for the PDF. The PDF arrives within minutes.
+
+On the Portfolio page click **Import CAS…**, pick the PDF, type its password and click **Read the
+statement**. The app reads it on your own device (nothing is uploaded anywhere) and shows what it found,
+scheme by scheme, with a **Goes to** choice for each:
+
+- a holding the app already has, matched by its AMFI scheme code (through the ISIN in the statement) or
+  by folio and name;
+- **Create a new holding** with the scheme code the statement's ISIN points to, or one of the likely
+  schemes suggested by name when the statement has no ISIN, for you to confirm;
+- **Skip this scheme**.
+
+Under each scheme the transactions are listed with what they will become: SIP, purchase, redemption,
+dividend / IDCW. Stamp duty, STT and TDS lines, reversed or rejected entries and segregated-portfolio
+entries are not transactions and are left out; a reinvested dividend is a purchase; a switch becomes a
+redemption in the fund it left and a purchase in the fund it entered. Entries already recorded (same
+date, amount and units) are marked and skipped, so you can import the same or an overlapping statement
+again without duplicates. **Import** then creates the new holdings (fetching their NAV history) and adds
+the transactions, each with its folio, units and NAV exactly as the statement shows them.
+
+A monthly detailed CAS is the easiest way to keep every mutual fund current: import it when it arrives.
+The depository statements from NSDL and CDSL are not read yet.
 
 ---
 
@@ -941,7 +985,51 @@ is declared. The app records this as:
 
 ---
 
-## 19. Your data: where it is, backups and safety
+## 19. Printing and saving as PDF
+
+Click **Print** in the top bar (or **Print** on a holding's page) to put the portfolio, or one holding, on paper
+or into a PDF. A dialog lets you choose exactly what goes in:
+
+- **What to print** – the whole portfolio, or one holding picked from the list. For the portfolio you also
+  choose **Active**, **Closed** or **Both** holdings, and which **asset classes** to include.
+- **Sections**, each a tick box; the four **presets** tick the usual combinations:
+  - **Summary** – invested, current value, unrealised profit, realised gains, dividends and interest
+    received, XIRR, locked and redeemable value (for one holding: its own tiles).
+  - **Allocation by asset class** – the ring as a picture with its table (portfolio only).
+  - **Holdings list** – one line per holding with its folio or account number, status, invested, current
+    value, P&L, XIRR and latest price; closed holdings in their own table with bought, sold for, realised
+    and XIRR.
+  - **Folio-wise breakdown** – for every holding spread over several folios, accounts, NPS schemes or EPF
+    shares: each part's entries, invested, units, value, P&L and XIRR.
+  - **Holding details** – scheme code and fund house, symbol and exchange, the NPS manager and schemes, the
+    EPF employer, the PPF bank and maturity, the gold bond's series, issue terms and interest, the fixed
+    deposit's terms and rate, the policy's premium schedule, maturity and return.
+  - **Income and realised gains** – per holding for the chosen period: dividends and interest received,
+    interest credited (EPF, PPF), sale and payout proceeds, the realised gain of those sales (FIFO, as the
+    app computes it everywhere) and charges, with a total. The thing to hand to whoever does your tax.
+  - **Transactions** – every entry of the chosen period, oldest first, with each sale's realised gain and,
+    if you leave the box ticked, your comments.
+  - **Upcoming dates** – deposit and policy maturities, premiums due, bond interest dates, early-redemption
+    dates, PPF maturity, lock-ins ending, with overdue items marked.
+  - **Value over time** – the chart, as a picture.
+  Presets: **Snapshot** (summary, allocation, holdings), **Statement** (summary, holdings, folios, every
+  transaction), **Tax year** (summary, income and the transactions of the last financial year) and
+  **Everything**.
+- **Period** for the transactions and income sections: all time, this or last financial year (April to
+  March), this calendar year, or custom dates.
+- A **heading note** printed under the title, and whether to include **comments** on transactions.
+
+**Preview** opens the report as a page of its own, on white whatever theme you use, with a toolbar on top:
+**Print / save as PDF** opens your computer's print dialog, where any printer or *Save as PDF* can be
+chosen; **Change what is printed…** reopens the dialog with your choices; **Back** returns to where you
+were. On a phone or tablet the same button opens Android's print dialog, which also offers Save as PDF.
+What you see in the preview is what prints: tables carry their headings onto every page, and rows are not
+split across pages. The choices are remembered for next time. Prices are the ones the app holds at that
+moment, so click **Refresh prices** first if you want today's.
+
+---
+
+## 20. Your data: where it is, backups and safety
 
 - Everything is stored in a single file named **`portfolio.enc`**, inside the `data` folder next to the
   exe (or inside the project's `data` folder when running from source). If the folder next to the exe is
@@ -995,7 +1083,7 @@ treated as a change.
 
 ---
 
-## 20. The Android app
+## 21. The Android app
 
 The same app runs on an Android phone: the backend runs inside the app, the pages are the ones you know, and the
 data is the same encrypted file, `portfolio.enc`, kept in the app's private storage. It is installed from the
@@ -1006,7 +1094,7 @@ a few seconds; after that it opens like any other app and asks for the vault pas
 - **The same data on the phone and the PC.** Long-press anywhere on a page to open the menu. **Save vault as…**
   writes the phone's vault file to a place you pick: Google Drive, OneDrive, Dropbox and the Downloads folder all
   appear in the picker. **Open vault file…** replaces the phone's vault with a file you pick (it asks first, and
-  the app locks so the file's own password is needed). On the PC, the vault is in the data folder (section 19),
+  the app locks so the file's own password is needed). On the PC, the vault is in the data folder (section 20),
   which can itself be a cloud-synced folder. Copy the file in one direction at a time, and keep only one device
   open while you make changes: both apps refuse to overwrite a file that another device changed.
 - **Prices** are fetched by the phone the same way: mutual funds, stocks, NPS and gold bonds refresh when
@@ -1017,7 +1105,22 @@ a few seconds; after that it opens like any other app and asks for the vault pas
 
 ---
 
-## 21. Tips and shortcuts
+### Fingerprint or screen-lock unlock
+
+On the phone or tablet, the unlock screen offers a tick box, **Unlock with a fingerprint or the screen lock from
+next time**, when the device has a fingerprint or a screen lock set up. Tick it, type your password and unlock:
+the device asks for your fingerprint (or PIN, pattern or password) once to confirm, and from then on the lock
+screen asks for a fingerprint as soon as it appears, with the password field still there underneath. A
+**Turn off fingerprint unlock** link on the lock screen forgets it again.
+
+How it is kept safe: the password is stored on the device encrypted with a key that lives in Android's
+Keystore and can only be used right after a fingerprint or the screen lock. Adding a new fingerprint or
+removing the screen lock invalidates that key, so the app falls back to asking for the password and the
+box has to be ticked again. Changing the password in the app turns fingerprint unlock off for the same
+reason. The vault file itself is unchanged: it is still encrypted with your password, and copying it
+elsewhere still needs the password.
+
+## 22. Tips and shortcuts
 
 - **Enter** on a highlighted holding or folio row opens it; **Escape** closes any dialog.
 - Bookmark a holding's page, or a folio view of it, in your browser; the address includes both.
@@ -1028,7 +1131,7 @@ a few seconds; after that it opens like any other app and asks for the vault pas
 
 ---
 
-## 22. Troubleshooting
+## 23. Troubleshooting
 
 | Problem | What to do |
 |---|---|
@@ -1055,7 +1158,7 @@ a few seconds; after that it opens like any other app and asks for the vault pas
 
 ---
 
-## 23. Feature history
+## 24. Feature history
 
 | Date | Added |
 |---|---|
@@ -1076,6 +1179,10 @@ a few seconds; after that it opens like any other app and asks for the vault pas
 | 4 Nov 2026 | Dividends are shown as realised, together with gains from sales, never inside the unrealised profit; the investment figure is also shown net of dividends received. |
 | 4 Nov 2026 | Exit and closed holdings: an Exit button records the sale of everything held; any sale that brings the units to zero marks the holding Closed and lists it under a Closed tab on the portfolio page, keeping all its data. |
 | 4 Nov 2026 | Version 0.4.0: the version is shown in the top bar; upgrades can no longer show stale screens (the window cache is cleared on start and the server forbids caching), and starting a newer exe replaces an older instance that is still running. |
+| 9 Nov 2026 | Version 0.14.1: SIP schedules on mutual funds and stocks. Enter the amount, day and frequency once; the app matches recorded purchases to the instalments, shows the ones due and not yet recorded (on the holding, in the portfolio row and in a Due banner), records them in one click at the due date's NAV, and a CAS import later replaces such an instalment with the statement's exact figures. The print report's Upcoming dates list the next instalments. |
+| 9 Nov 2026 | Version 0.14.0: import a CAMS / KFintech consolidated account statement PDF. The app reads the detailed CAS on the device, matches each scheme to a holding by scheme code (through the ISIN) or by folio and name, offers to create the holdings it lacks, lists every transaction with what it becomes, leaves out tax lines and reversals, skips entries already recorded, and imports the rest with their folio, units and NAV. On a phone the PDF is picked with the system file picker. |
+| 9 Nov 2026 | Version 0.13.1: fingerprint or screen-lock unlock on Android. Tick the box on the lock screen once; from then on a fingerprint, or the device's PIN, pattern or password, opens the app, with the typed password always available. The password is kept encrypted under an Android Keystore key that only the device's own lock can use; new fingerprints, a removed screen lock or a changed app password turn it off until re-enabled. |
+| 9 Nov 2026 | Version 0.13.0: print and save as PDF. A Print button (top bar, and on every holding's page) opens a dialog to choose the whole portfolio or one holding, active or closed holdings, asset classes, the sections (summary, allocation, holdings list, folio-wise breakdown, holding details, income and realised gains, transactions, upcoming dates, value chart) with Snapshot / Statement / Tax year / Everything presets, the period (financial year, calendar year or custom dates), a heading note and whether comments go in. The preview is a report page on white; Print / save as PDF hands it to the computer's print dialog, or Android's on a phone. Each sale now carries its realised gain in the transactions. |
 | 9 Nov 2026 | Version 0.12.2: first run on a real phone (Motorola Edge 30, Android 14) and the layout fixes it showed up: the holdings table keeps Holding, Current value, P&L and XIRR on a narrow screen (Status, Invested, Latest and Edit are left to the holding's page), the detail cards wrap their text instead of running off the edge, the kind chooser in the Add dialog wraps onto two lines, the lock screen says "phone" on a phone and its vault path wraps inside the card. Reinstalling the same version of the Android app now refreshes its copy of the pages. Also run on a Galaxy Tab S7 FE: in landscape it gets the full desktop layout, held upright the holdings table drops only Status and the latest price, and the P&L note under a holding now wraps at every width. |
 | 7 Nov 2026 | Version 0.12.1: tick boxes in the allocation list. Untick a class to leave it out of the ring; the ring, its centre total and the shares are redrawn from the ticked classes, and the choice is remembered. |
 | 7 Nov 2026 | Version 0.12.0: life insurance policies (LIC endowment and money-back plans). A policy holds its premium, frequency, first / last premium dates and maturity value as terms; its return is the rate that takes every premium, paid and still due, to the maturity value, and the premiums paid are valued at that rate. The add dialog records every premium due so far in one go, a Premium paid button records the next, overdue premiums are flagged, benefits received and the payout / surrender are recorded like FD interest and payouts. A premium sheet imports directly: paid rows become premiums, future rows and the Value at maturity line set the terms. Rows dated after today are no longer imported for any kind of holding. Insurance gets its own slice of the allocation ring. |

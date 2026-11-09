@@ -229,6 +229,26 @@ page shows the return in both currencies.
 - Insurance policy page: premiums paid of the schedule, maturity value, policy return and XIRR tiles, a Policy
   details card, Premium paid and Matured / paid out buttons, overdue-premium banners; the add dialog back-fills
   every premium due so far, and a premium sheet (paid rows, future rows, Value at maturity line) sets the terms
+- Print / save as PDF (`frontend/print.js`): a dialog picks the scope (portfolio or one holding, active /
+  closed, asset classes), the sections (summary, allocation, holdings, folio-wise, details, income and realised
+  gains, transactions, upcoming dates, value chart), the period and presets; the `#/print` route renders the
+  report (charts as pictures, print stylesheet, light on white) and hands it to `window.print()`, or to the
+  Android app's `AndroidApp.print()` bridge, which opens the system print dialog
+- SIP schedules (`backend/sip.py`): `details.sips` on a fund or stock (amount, day 1-28, monthly / quarterly, start,
+  end, folio, paused); the payload's `sips` gives each schedule's recorded and pending instalments (a purchase within 5
+  days, 1 % and the folio counts), the next due date and the monthly total; pending ones are recorded through the bulk
+  route with the note the CAS import recognises and replaces (`replace_id`)
+- CAS import (`backend/cas.py`, `frontend/cas.js`): `POST /api/import/cas` takes a CAMS / KFintech detailed CAS PDF
+  (base64 + password), reads it with pdfminer.six (text boxes grouped into rows, then regular expressions for the
+  folio, scheme and transaction lines, following the MIT-licensed casparser's approach without its ISIN database),
+  classifies each line (SIP, purchase, redemption, dividend, switch, tax, reversal), looks the ISIN up in mfapi.in's
+  scheme list for the AMFI code (or suggests schemes by name), matches holdings by code or folio + name, flags
+  entries already recorded, and the page imports through the usual fund and bulk-transaction routes
+- Android: fingerprint or screen-lock unlock. The page asks `AndroidApp.enableBiometric(password)` once; the
+  activity keeps the password AES-GCM encrypted under an Android Keystore key with `setUserAuthenticationRequired`
+  (biometric strong or device credential, per use, invalidated by new enrolments), and `AndroidApp.biometricUnlock()`
+  runs a `BiometricPrompt` with the cipher as its CryptoObject, decrypts, and posts `/api/auth/unlock` itself;
+  the page is told through `window.onBiometric(kind)`
 - Active / Closed tabs on the holdings table, rows grouped by asset class with subtotals and a per-class XIRR (groups collapse on click); closed holdings
   show bought, sold-for, realised (incl. dividends) and final XIRR
 
@@ -313,7 +333,7 @@ data/                             portfolio.enc (encrypted database, created on 
 | POST | `/api/auth/setup`, `/unlock`, `/lock`, `/change-password` | Password lifecycle. Every other endpoint answers 409 before setup and 423 while locked |
 | GET | `/api/portfolio` | Totals in the base currency, per-holding rows, combined history, kind split, per-currency lines, locked / redeemable split |
 | GET, POST | `/api/funds` | List holdings with summaries / create one. Body: `kind` (`MF` with `scheme_code`, or `STOCK` with `symbol`), `name`, `folio_number`, `locked`, `lock_in_until`, `notes` |
-| GET, PUT, DELETE | `/api/funds/{id}` | Holding detail with transactions, history (and `base` / `history_base` in the base currency for a foreign stock) and per-folio summaries / update / delete. `?folio=` scopes the detail to one folio |
+| GET, PUT, DELETE | `/api/funds/{id}` | Holding detail with transactions (each sale carrying its FIFO `gain`), history (and `base` / `history_base` in the base currency for a foreign stock) and per-folio summaries / update / delete. `?folio=` scopes the detail to one folio |
 | POST | `/api/funds/{id}/transactions` | Add a transaction (`SIP`, `LUMPSUM`, `REDEMPTION`, `DIVIDEND`, `BONUS`, `SWITCH_IN`, `SWITCH_OUT`, `CHARGE`; `scheme` for NPS / EPF; `rate` for EPF; an FD / policy `REDEMPTION` without `units` pays out every unit held) |
 | GET | `/api/cloud/status` | Setup / connection / last backup per provider; `?check=true` also looks at the cloud copy |
 | PUT | `/api/cloud/credentials` | Store a provider's OAuth client ID (and secret) in settings.json |
@@ -321,6 +341,7 @@ data/                             portfolio.enc (encrypted database, created on 
 | POST | `/api/cloud/backup` | Upload the vault file now |
 | POST | `/api/cloud/restore` | Replace this device's vault with the cloud copy (previous file kept) |
 | DELETE | `/api/cloud/{provider}` | Forget the sign-in |
+| POST | `/api/import/cas` | Read a CAMS / KFintech CAS PDF: schemes with their matches and candidate codes, transactions in the app's terms with `existing_id` for ones already recorded, skipped lines with the reason |
 | GET | `/api/sgb/issues` | Every Sovereign Gold Bond series on the exchange list (symbol, name, issue date and price, latest price, interest dates) |
 | GET | `/api/gold/price` | The gold price per gram (latest, or `?on=` a date) and the recent entries |
 | POST | `/api/gold/price` | Record the gold price per gram for a date (`{date, price}`) |

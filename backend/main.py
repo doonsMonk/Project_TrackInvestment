@@ -1,6 +1,7 @@
 """FastAPI application: JSON API under /api plus the static frontend at /."""
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 import os
@@ -19,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from .compat import field_validator, list_limits, model_validator  # pydantic v2 on the PC, v1 on Android
 
-from . import calc, cloud, db, fd, gold, nav, nps, policy, quotes, sgb
+from . import calc, cas, cloud, db, fd, gold, nav, nps, policy, quotes, sgb, sip
 
 # In the PyInstaller build the frontend is unpacked under sys._MEIPASS; in a dev checkout it's <project>/frontend.
 _BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
@@ -43,7 +44,7 @@ async def lifespan(_: FastAPI):
     db.vault.lock()  # flush and forget the key on shutdown
 
 
-VERSION = "0.12.2"
+VERSION = "0.14.1"
 app = FastAPI(title="Investment Tracker", version=VERSION, lifespan=lifespan)
 
 
@@ -448,7 +449,9 @@ class FundIn(BaseModel):
             self.details = {"bank": str(d.get("bank") or "").strip()[:120], "opened": _iso_date_or_none(str(opened)) if opened else None}
             self.scheme_code = None
         else:
-            self.details = None
+            d = self.details if isinstance(self.details, dict) else {}
+            sips = sip.clean(d.get("sips")) if self.kind in (MF, STOCK) else []  # SIP schedules live in the details
+            self.details = {"sips": sips} if sips else None
         if self.currency:
             self.currency = self.currency.strip().upper()
             if not self.currency.isalpha():
@@ -965,6 +968,10 @@ def _fund_payload(conn: sqlite3.Connection, row: sqlite3.Row, detail: bool = Fal
     (one summary per E / C / G scheme) and `schemes_total`; `scheme` scopes the view to one scheme."""
     fund = _fund_dict(row)
     all_txns = _txns(conn, fund["id"])
+    if detail:  # each sale carries its own realised gain, for statements and the income section of a report
+        gains = calc.sale_gains(all_txns)
+        for t in all_txns:
+            t["gain"] = gains.get(t["id"])
     today = dt.date.today()
     folio_keys = sorted({t["folio_number"] for t in all_txns}, key=lambda s: (s == "", s))
     fund["folio_count"] = len(folio_keys)
@@ -1035,6 +1042,8 @@ def _fund_payload(conn: sqlite3.Connection, row: sqlite3.Row, detail: bool = Fal
     fund["closed_on"] = full["closed_on"]
     fund["scheme"] = nav.scheme_meta(conn, fund["scheme_code"]) if fund["kind"] == MF else None
     fund["quote"] = quotes.meta(conn, fund["symbol"]) if fund["kind"] == STOCK else None
+    if fund["kind"] in (MF, STOCK):
+        fund["sips"] = sip.status((fund["details"] or {}).get("sips") or [], all_txns, today)
     if fund["kind"] == FD:
         fund["fd"] = fd.info(fd.terms(fund["details"], all_txns), today, full["current_value"], full["units"])
     if fund["kind"] == INS:
@@ -1093,6 +1102,115 @@ def _fund_payload(conn: sqlite3.Connection, row: sqlite3.Row, detail: bool = Fal
 
 
 # ----------------------------------------------------------------- scheme lookup (mfapi.in)
+
+# ---------------------------------------------------------------- CAS import (CAMS / KFintech statement PDFs)
+class CasIn(BaseModel):
+    pdf_base64: str = Field(description="The statement PDF, base64")
+    password: str = Field(default="", max_length=200, description="The PDF password (usually the PAN)")
+
+
+def _cas_match(conn: sqlite3.Connection, scheme: dict, folio: str, listing: dict | None, funds: list) -> dict:
+    """Which holding a CAS scheme belongs to: by AMFI code (through the ISIN), else by folio + similar name; and the
+    mfapi.in schemes it could be, for the user to confirm when nothing matched."""
+    code = None
+    code_name = None
+    isin = (scheme.get("isin") or "").upper()
+    if listing and isin and isin in listing["by_isin"]:
+        code, code_name = listing["by_isin"][isin]
+    match = None
+    by = None
+    if code:
+        match = next((f for f in funds if f["kind"] == MF and f["scheme_code"] == code), None)
+        by = "code" if match else None
+    if match is None:
+        words = cas._words(scheme["name"])
+        for f in funds:
+            if f["kind"] != MF:
+                continue
+            same_folio = folio and f["folio_number"] and folio.replace(" ", "") == str(f["folio_number"]).replace(" ", "")
+            have = cas._words(f["name"]) | cas._words((f.get("scheme") or {}).get("scheme_name") or "")
+            if same_folio and words and len(words & have) >= max(1, len(words) // 2):
+                match, by = f, "folio"
+                break
+    candidates = cas.suggest_codes(scheme["name"], listing) if listing and not code else []
+    return {"fund_id": match["id"] if match else None, "fund_name": match["name"] if match else None, "by": by,
+            "scheme_code": code, "scheme_code_name": code_name, "candidates": candidates}
+
+
+def _cas_txn(t: dict) -> dict | None:
+    """A CAS line as the app's transaction, or None for the lines that are not transactions (taxes, reversals…)."""
+    kind = t["type"]
+    if kind in ("TAX", "OTHER", "SEGREGATION", "REVERSAL"):
+        return None
+    amount = abs(t["amount"] or 0.0)
+    units = abs(t["units"] or 0.0)
+    navv = t["nav"] or (round(amount / units, 4) if units and amount else None)
+    if kind == "DIVIDEND":
+        return {"type": "DIVIDEND", "date": t["date"], "amount": round(amount, 2), "units": 0.0, "nav": navv, "notes": t["description"]}
+    if kind in ("SIP", "LUMPSUM", "SWITCH_IN"):
+        if not units:
+            return None
+        return {"type": "LUMPSUM" if kind == "SWITCH_IN" else kind, "date": t["date"], "amount": round(amount, 2), "units": round(units, 4), "nav": navv,
+                "notes": t["description"] if kind == "SWITCH_IN" else ""}
+    if kind in ("REDEMPTION", "SWITCH_OUT"):
+        if not units:
+            return None
+        return {"type": "REDEMPTION", "date": t["date"], "amount": round(amount, 2), "units": round(units, 4), "nav": navv,
+                "notes": t["description"] if kind == "SWITCH_OUT" else ""}
+    return None
+
+
+@app.post("/api/import/cas")
+def import_cas(body: CasIn, conn: sqlite3.Connection = Depends(get_conn)):
+    """Read a CAMS / KFintech detailed CAS PDF. Nothing is written: the answer is the statement, scheme by scheme, with
+    each transaction in the app's terms, which holding it matched (or the schemes it could be), and which entries the
+    holding already has. The page imports from it with the usual routes."""
+    try:
+        data = base64.b64decode(body.pdf_base64, validate=False)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail="The file could not be decoded") from e
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="The PDF is larger than 25 MB")
+    try:
+        statement = cas.read_pdf(data, body.password)
+    except cas.CasError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    listing = None
+    listing_error = None
+    try:
+        listing = cas.scheme_list()
+    except Exception as e:  # noqa: BLE001 - offline: schemes are matched by folio and name only
+        listing_error = str(e)
+    funds = [_fund_dict(r) for r in conn.execute("SELECT * FROM funds").fetchall()]
+    for f in funds:
+        f["scheme"] = nav.scheme_meta(conn, f["scheme_code"]) if f["kind"] == MF and f["scheme_code"] else None
+    existing_by_fund: dict[int, list[dict]] = {}
+    out_folios = []
+    for folio in statement["folios"]:
+        schemes = []
+        for sc in folio["schemes"]:
+            match = _cas_match(conn, sc, folio["folio"], listing, funds)
+            txns = []
+            skipped = []
+            if match["fund_id"] and match["fund_id"] not in existing_by_fund:
+                existing_by_fund[match["fund_id"]] = _txns(conn, match["fund_id"])
+            have = existing_by_fund.get(match["fund_id"], []) if match["fund_id"] else []
+            for t in sc["transactions"]:
+                row = _cas_txn(t)
+                if row is None:
+                    skipped.append({"date": t["date"], "description": t["description"], "amount": t["amount"], "why": t["type"].lower()})
+                    continue
+                dup = next((h for h in have if h["date"] == row["date"] and abs(h["amount"] - row["amount"]) < 0.01
+                            and (row["units"] == 0 or abs(h["units"] - row["units"]) < 0.001)), None)
+                row["existing_id"] = dup["id"] if dup else None
+                # an instalment recorded from a SIP schedule is replaced by the statement's exact figures
+                sched = sip.scheduled_match(have, row["date"], row["amount"]) if not dup and row["type"] in ("SIP", "LUMPSUM") else None
+                row["replace_id"] = sched["id"] if sched else None
+                txns.append(row)
+            schemes.append({**{k: v for k, v in sc.items() if k != "transactions"}, "match": match, "transactions": txns, "skipped": skipped})
+        out_folios.append({"folio": folio["folio"], "amc": folio["amc"], "schemes": schemes})
+    return {"source": statement["source"], "period": statement["period"], "folios": out_folios, "scheme_list_error": listing_error}
+
 
 @app.get("/api/schemes/search")
 def scheme_search(q: str = Query(min_length=2, max_length=100)):

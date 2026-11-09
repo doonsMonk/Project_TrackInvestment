@@ -1,7 +1,29 @@
 package com.investmenttracker.app
 
 import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+import android.print.PrintAttributes
+import android.print.PrintManager
+import android.webkit.JavascriptInterface
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.net.Uri
 import android.os.Bundle
 import android.view.Menu
@@ -39,6 +61,12 @@ class MainActivity : AppCompatActivity() {
 
     private val openVault = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { confirmReplace(it) } }
     private val saveVault = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> uri?.let { copyOut(it) } }
+    // <input type="file"> in the page (the CAS statement PDF): the WebView asks the activity, which opens the system picker
+    private var fileChooser: ValueCallback<Array<Uri>>? = null
+    private val pickFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        fileChooser?.onReceiveValue(if (uri != null) arrayOf(uri) else null)
+        fileChooser = null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,6 +94,16 @@ class MainActivity : AppCompatActivity() {
             builtInZoomControls = false
             useWideViewPort = true
             loadWithOverviewMode = true
+        }
+        web.addJavascriptInterface(Bridge(), "AndroidApp") // the page calls AndroidApp.print() from its Print button
+        web.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
+                fileChooser?.onReceiveValue(null)
+                fileChooser = callback
+                val types = params.acceptTypes.filter { it.isNotBlank() }.map { if (it.startsWith(".")) (if (it.equals(".pdf", true)) "application/pdf" else "*/*") else it }
+                pickFile.launch((if (types.isEmpty()) listOf("*/*") else types).toTypedArray())
+                return true
+            }
         }
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -128,6 +166,160 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---- vault file actions ---------------------------------------------------------------------------------------
+
+    /** What the page may ask of the app. `print()` hands the current page (the report) to Android's print dialog,
+     *  where a printer or Save as PDF can be chosen; the page's print stylesheet applies. */
+    inner class Bridge {
+        @JavascriptInterface
+        fun print() {
+            runOnUiThread {
+                val manager = getSystemService(Context.PRINT_SERVICE) as PrintManager
+                val name = getString(R.string.app_name)
+                manager.print(name, web.createPrintDocumentAdapter(name), PrintAttributes.Builder().build())
+            }
+        }
+
+        /** Can this device ask for a fingerprint or its screen lock at all? */
+        @JavascriptInterface
+        fun biometricAvailable(): Boolean = bioAvailable()
+
+        /** Is a password kept for fingerprint unlock? */
+        @JavascriptInterface
+        fun biometricEnabled(): Boolean = bioEnabled()
+
+        /** Keep this password for fingerprint unlock, after one fingerprint or screen-lock confirmation. */
+        @JavascriptInterface
+        fun enableBiometric(password: String) = bioEnable(password)
+
+        /** Ask for a fingerprint or the screen lock, then unlock the vault with the kept password. */
+        @JavascriptInterface
+        fun biometricUnlock() = bioUnlock()
+
+        /** Forget the kept password. */
+        @JavascriptInterface
+        fun disableBiometric() { bioForget(); tellPage("disabled") }
+    }
+
+    // ---- fingerprint / screen-lock unlock. The vault password is kept encrypted with an AES key that lives in the
+    // Android Keystore and can only be used right after a fingerprint or the device's PIN / pattern / password
+    // (BiometricPrompt with a CryptoObject). New fingerprints or a removed screen lock invalidate the key, so the
+    // password has to be typed once more and the feature turned on again. The vault file itself stays encrypted
+    // with the password as before.
+    private val authPrefs by lazy { getSharedPreferences("auth", MODE_PRIVATE) }
+    private val keyAlias = "vault-password"
+    private val authenticators = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+        BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+    else BiometricManager.Authenticators.BIOMETRIC_STRONG
+
+    private fun bioAvailable(): Boolean = BiometricManager.from(this).canAuthenticate(authenticators) == BiometricManager.BIOMETRIC_SUCCESS
+    private fun bioEnabled(): Boolean = authPrefs.contains("bio_ct")
+
+    private fun secretKey(create: Boolean): SecretKey? {
+        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (ks.getKey(keyAlias, null) as? SecretKey)?.let { return it }
+        if (!create) return null
+        val spec = KeyGenParameterSpec.Builder(keyAlias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .setUserAuthenticationRequired(true)
+            .setInvalidatedByBiometricEnrollment(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            spec.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL)
+        } else {
+            @Suppress("DEPRECATION")
+            spec.setUserAuthenticationValidityDurationSeconds(-1)
+        }
+        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply { init(spec.build()) }.generateKey()
+    }
+
+    private fun bioForget() {
+        authPrefs.edit().remove("bio_iv").remove("bio_ct").apply()
+        runCatching { KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(keyAlias) }
+    }
+
+    /** window.onBiometric(kind, detail) in the page: enabled, disabled, unlocked, cancelled, stale, invalidated, failed. */
+    private fun tellPage(kind: String, detail: String = "") {
+        runOnUiThread { web.evaluateJavascript("window.onBiometric && window.onBiometric(${JSONObject.quote(kind)}, ${JSONObject.quote(detail)})", null) }
+    }
+
+    private fun prompt(title: String, subtitle: String, cipher: Cipher, onDone: (Cipher) -> Unit) {
+        val info = BiometricPrompt.PromptInfo.Builder().setTitle(title).setSubtitle(subtitle).setAllowedAuthenticators(authenticators)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) info.setNegativeButtonText(getString(R.string.cancel))
+        BiometricPrompt(this, ContextCompat.getMainExecutor(this), object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                val c = result.cryptoObject?.cipher
+                if (c == null) tellPage("failed", "no cipher") else try { onDone(c) } catch (e: Exception) { bioForget(); tellPage("failed", e.toString()) }
+            }
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) { tellPage("cancelled", errString.toString()) }
+        }).authenticate(info.build(), BiometricPrompt.CryptoObject(cipher))
+    }
+
+    private fun bioEnable(password: String) {
+        runOnUiThread {
+            try {
+                val key = secretKey(create = true) ?: throw IllegalStateException("no key")
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
+                prompt(getString(R.string.bio_enable_title), getString(R.string.bio_enable_sub), cipher) { c ->
+                    val ct = c.doFinal(password.toByteArray(Charsets.UTF_8))
+                    authPrefs.edit()
+                        .putString("bio_iv", Base64.encodeToString(c.iv, Base64.NO_WRAP))
+                        .putString("bio_ct", Base64.encodeToString(ct, Base64.NO_WRAP))
+                        .apply()
+                    tellPage("enabled")
+                }
+            } catch (e: Exception) {
+                bioForget()
+                tellPage("failed", e.toString())
+            }
+        }
+    }
+
+    private fun bioUnlock() {
+        runOnUiThread {
+            val iv = authPrefs.getString("bio_iv", null)
+            val ct = authPrefs.getString("bio_ct", null)
+            if (iv == null || ct == null) { tellPage("disabled"); return@runOnUiThread }
+            try {
+                val key = secretKey(create = false) ?: throw KeyPermanentlyInvalidatedException()
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP))) }
+                prompt(getString(R.string.bio_unlock_title), getString(R.string.bio_unlock_sub), cipher) { c ->
+                    val password = String(c.doFinal(Base64.decode(ct, Base64.NO_WRAP)), Charsets.UTF_8)
+                    executor.execute {
+                        when (val status = postUnlock(password)) {
+                            200 -> tellPage("unlocked")
+                            401, 409 -> { bioForget(); tellPage("stale") }
+                            else -> tellPage("failed", "the app answered $status")
+                        }
+                    }
+                }
+            } catch (e: KeyPermanentlyInvalidatedException) {
+                bioForget()
+                tellPage("invalidated")
+            } catch (e: Exception) {
+                bioForget()
+                tellPage("failed", e.toString())
+            }
+        }
+    }
+
+    /** POST the password to the backend inside this app; the page never sees it. */
+    private fun postUnlock(password: String): Int {
+        val conn = URL("http://127.0.0.1:$port/api/auth/unlock").openConnection() as HttpURLConnection
+        return try {
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 120_000
+            conn.doOutput = true
+            conn.outputStream.use { it.write(JSONObject().put("password", password).toString().toByteArray(Charsets.UTF_8)) }
+            conn.responseCode
+        } catch (e: Exception) {
+            -1
+        } finally {
+            conn.disconnect()
+        }
+    }
 
     private fun showMenu(anchor: View) {
         val menu = PopupMenu(this, anchor)

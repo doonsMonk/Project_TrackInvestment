@@ -179,6 +179,19 @@ def _apply(lots: Lots, t: dict) -> float:
     return 0.0
 
 
+def sale_gains(txns: list[dict]) -> dict:
+    """Realised gain of every sale, by transaction id: proceeds less the FIFO cost of the units sold, the lots kept
+    per scheme / share the way `summarize` keeps them. Reports and statements use it per period."""
+    lots_by_scheme: dict[str, Lots] = {}
+    out: dict = {}
+    for t in _chronological(txns):
+        lots = lots_by_scheme.setdefault(t.get("scheme") or "", Lots())
+        gain = _apply(lots, t)
+        if t["type"] in SELLS and t.get("id") is not None:
+            out[t["id"]] = round(gain, 2)
+    return out
+
+
 def cashflows(txns: list[dict], internal: bool = False) -> list[tuple[date, float]]:
     """Dated cashflows for XIRR: purchases negative; redemptions and dividends positive; bonus units nothing.
     Switches are internal to the holding and count only when `internal` is set (one scheme's own return);
