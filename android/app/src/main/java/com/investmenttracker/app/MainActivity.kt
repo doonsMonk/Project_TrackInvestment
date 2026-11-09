@@ -103,7 +103,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun unpackFrontend() {
         val stamp = File(frontendDir, ".version")
-        val wanted = BuildConfig.VERSION_NAME + "/" + BuildConfig.VERSION_CODE
+        // the install time is part of the stamp, so reinstalling the same version (a rebuild during development) refreshes the pages too
+        val installed = try { packageManager.getPackageInfo(packageName, 0).lastUpdateTime } catch (e: Exception) { 0L }
+        val wanted = BuildConfig.VERSION_NAME + "/" + BuildConfig.VERSION_CODE + "/" + installed
         if (stamp.exists() && stamp.readText() == wanted) return
         frontendDir.deleteRecursively()
         copyAssetDir("frontend", frontendDir)

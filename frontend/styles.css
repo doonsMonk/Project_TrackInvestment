@@ -211,6 +211,9 @@ tr.active-row td { background: var(--surface-2); }
 .alloc-list .kv-row > .swatch { flex: none; position: relative; top: 1px; }
 .alloc-list .kv-row > .swatch + span { white-space: nowrap; font-weight: 500; }
 .alloc-list .kv-row.currency-row { padding-left: 22px; }
+.alloc-list .alloc-pick { flex: none; margin: 0; width: 15px; height: 15px; position: relative; top: 2px; accent-color: var(--accent); cursor: pointer; }
+.alloc-list .kv-row.alloc-off > .swatch, .alloc-list .kv-row.alloc-off > span, .alloc-list .kv-row.alloc-off > b { opacity: 0.45; }
+.donut-wrap .donut-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; margin: 0; padding: 0 12px; }
 .kv-list { margin-top: 10px; }
 .kv-row { display: flex; gap: 12px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--border); font-size: 0.9rem; }
 .kv-row > span:first-child { white-space: nowrap; font-weight: 500; }
@@ -234,6 +237,21 @@ table.data td { padding: 10px; border-bottom: 1px solid var(--border); vertical-
 table.data tbody tr:last-child td { border-bottom: 0; }
 table.data .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 table.data .nowrap { white-space: nowrap; }
+table.data.kv-table { min-width: 0; } /* label / value cards: fit the screen and wrap */
+table.data.kv-table td { white-space: normal; }
+@media (max-width: 640px) {
+  /* a phone keeps the holding, its value, P&L and XIRR; status, invested, latest price and Edit live on the holding's page */
+  table.data.holdings { min-width: 0; }
+  table.data.holdings .col-status, table.data.holdings .col-invested, table.data.holdings .col-latest, table.data.holdings .col-edit { display: none; }
+  table.data.holdings { font-size: 0.85rem; }
+  table.data.holdings td, table.data.holdings th { padding: 8px 5px; }
+  table.data.holdings td:first-child { padding-left: 0; }
+  table.data.holdings td:last-of-type, table.data.holdings th:last-of-type { padding-right: 0; }
+  table.data.holdings .fund-name { white-space: normal; min-width: 0; }
+  table.data.holdings td.num > div { white-space: normal; max-width: 150px; } /* the P&L note (realised…) wraps instead of widening the table */
+  .kind-toggle { flex-wrap: wrap; border-radius: 16px; }
+  .head-actions { flex-wrap: wrap; }
+}
 table.data tfoot td { font-weight: 600; border-top: 1px solid var(--border-strong); border-bottom: 0; }
 tr.group-row td { background: var(--surface-2); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--border); }
 tr.group-row:hover td { background: color-mix(in srgb, var(--surface-2) 70%, var(--border)); }
@@ -358,6 +376,8 @@ body.locked .needs-unlock { display: none; }
 .auth-card .form { text-align: left; }
 .auth-card .form-actions .btn { width: 100%; }
 .auth-card .banner { text-align: left; }
+.auth-card .footnote { overflow-wrap: anywhere; }
+.auth-card .footnote code { overflow-wrap: anywhere; word-break: break-all; }
 .auth-card .footnote { margin-top: 18px; color: var(--text-muted); font-size: 0.8rem; }
 .check.warn-check { align-items: flex-start; }
 .check.warn-check input { margin-top: 3px; }

@@ -131,11 +131,15 @@ buttons to change the period; the choice is remembered. Hover anywhere on the ch
 values on that day and the gain or loss at that point. The value at the right end of each line is labelled.
 
 **Allocation** – a pie chart, drawn as a ring with your total current value in the middle, splitting your
-holdings by asset class: mutual funds and stocks today, and further classes such as gold as they are
-added. Each class keeps a fixed colour. The list beside the ring gives, for each class, the number of
-holdings, the amount invested, its share of the portfolio and its current value; hovering a slice shows
-the same figures. Below the list, one line per foreign currency shows how much you hold in that
-currency, the exchange rate used and its date, and the rupee value.
+holdings by asset class: mutual funds, stocks, NPS, EPF, PPF, gold bonds, fixed deposits and insurance
+policies, each with a fixed colour. The list beside the ring gives, for each class, the number of
+holdings, the amount invested, its share of the ring and its current value; hovering a slice shows the
+same figures. Each class has a **tick box** in front of it, all ticked to begin with: untick a class to
+leave it out of the ring, and the ring, the total in its middle and the shares are redrawn from the
+ticked classes only (useful for looking at the investments you can actually move, without the locked-in
+ones). An unticked class stays in the list, greyed, with its own figures. The choice is remembered on
+this device until you tick the class again. Below the list, one line per foreign currency shows how
+much you hold in that currency, the exchange rate used and its date, and the rupee value.
 
 **Locked vs redeemable** – a bar splitting your current value into what you could sell today (open
 holdings) and what is under lock-in (locked holdings), with the amounts and what was invested in each part.
@@ -1072,6 +1076,8 @@ a few seconds; after that it opens like any other app and asks for the vault pas
 | 4 Nov 2026 | Dividends are shown as realised, together with gains from sales, never inside the unrealised profit; the investment figure is also shown net of dividends received. |
 | 4 Nov 2026 | Exit and closed holdings: an Exit button records the sale of everything held; any sale that brings the units to zero marks the holding Closed and lists it under a Closed tab on the portfolio page, keeping all its data. |
 | 4 Nov 2026 | Version 0.4.0: the version is shown in the top bar; upgrades can no longer show stale screens (the window cache is cleared on start and the server forbids caching), and starting a newer exe replaces an older instance that is still running. |
+| 9 Nov 2026 | Version 0.12.2: first run on a real phone (Motorola Edge 30, Android 14) and the layout fixes it showed up: the holdings table keeps Holding, Current value, P&L and XIRR on a narrow screen (Status, Invested, Latest and Edit are left to the holding's page), the detail cards wrap their text instead of running off the edge, the kind chooser in the Add dialog wraps onto two lines, the lock screen says "phone" on a phone and its vault path wraps inside the card. Reinstalling the same version of the Android app now refreshes its copy of the pages. |
+| 7 Nov 2026 | Version 0.12.1: tick boxes in the allocation list. Untick a class to leave it out of the ring; the ring, its centre total and the shares are redrawn from the ticked classes, and the choice is remembered. |
 | 7 Nov 2026 | Version 0.12.0: life insurance policies (LIC endowment and money-back plans). A policy holds its premium, frequency, first / last premium dates and maturity value as terms; its return is the rate that takes every premium, paid and still due, to the maturity value, and the premiums paid are valued at that rate. The add dialog records every premium due so far in one go, a Premium paid button records the next, overdue premiums are flagged, benefits received and the payout / surrender are recorded like FD interest and payouts. A premium sheet imports directly: paid rows become premiums, future rows and the Value at maturity line set the terms. Rows dated after today are no longer imported for any kind of holding. Insurance gets its own slice of the allocation ring. |
 | 7 Nov 2026 | Version 0.11.0: fixed deposits. A deposit is one holding with the principal and the bank's maturity date and value as its terms; it is valued along a constant-rate curve between the two dates (effective rate shown), interest paid out is recorded as cash, and Matured / paid out records the payout and closes it. The add dialog records the deposit in one go; a sheet with an account number, type, date and amount imports directly and its Final Value at maturity line sets the terms. Fixed deposits get their own slice of the allocation ring. Pasted rows now keep an empty first cell, and long account numbers are no longer mistaken for amounts. |
 | 6 Nov 2026 | Version 0.10.0: cloud backup. Connect Google Drive, OneDrive or Dropbox through the provider's own sign-in (one-time client ID setup); every change is uploaded a few seconds later, any device can restore the latest copy, and the lock screen points out a newer copy saved elsewhere. |

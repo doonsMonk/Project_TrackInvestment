@@ -39,3 +39,22 @@ The vault is one file. Copy it between devices deliberately, and keep only one d
   points at). Close the PC app before copying a file over it.
 
 The file is encrypted with your password before it is written, so a cloud folder only ever holds ciphertext.
+
+## Testing on a phone over Wi-Fi
+
+When the PC's USB ports are blocked, Android 11+ can be debugged over Wi-Fi (phone and PC on the same network):
+
+1. On the phone: Settings > About phone > tap Build number seven times, then Developer options > Wireless debugging
+   (on). Open Wireless debugging, note its IP address & port, tap "Pair device with pairing code" and keep the
+   dialog open.
+2. On the PC, with adb from the SDK's `platform-tools`:
+   `adb pair <pairing ip:port> <code>` then `adb connect <ip:port from the Wireless debugging screen>`. Pairing is
+   remembered; the connect port changes between sessions.
+3. `adb install -r dist/InvestmentTracker-<version>.apk` and `adb shell am start -n
+   com.investmenttracker.app/.MainActivity`. `adb logcat -d | grep -i investmenttracker` shows the app's log lines.
+4. The backend inside the phone listens on 127.0.0.1:8000; `adb forward tcp:8002 tcp:8000` lets scripts on the PC
+   talk to it at http://127.0.0.1:8002 (the API suites take `TRACKER_BASE`).
+5. The debug build's WebView is inspectable: `adb shell pidof com.investmenttracker.app`, then
+   `adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`; open chrome://inspect in Chrome or Edge on
+   the PC, or talk to http://127.0.0.1:9333/json with the DevTools protocol directly (Playwright cannot attach to
+   a WebView). `adb exec-out screencap -p > shot.png` takes a true device screenshot.

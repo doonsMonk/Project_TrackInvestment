@@ -43,7 +43,7 @@ async def lifespan(_: FastAPI):
     db.vault.lock()  # flush and forget the key on shutdown
 
 
-VERSION = "0.12.0"
+VERSION = "0.12.2"
 app = FastAPI(title="Investment Tracker", version=VERSION, lifespan=lifespan)
 
 

@@ -213,7 +213,8 @@ page shows the return in both currencies.
 - Combined value-over-time chart
 - Allocation ring (pie) by asset class, driven by `totals.by_kind` so new classes appear automatically,
   with counts, invested amounts and shares, plus one line per foreign currency (amount held, rate used
-  and its date)
+  and its date); a tick box per class takes it out of the ring (ring, centre total and shares redrawn from
+  the ticked classes, the choice kept in `localStorage`)
 - Locked value vs redeemable value, by holding status
 - EPF page: by-financial-year table plus a stacked column chart of employee deposits, employer deposits and
   interest credited per year

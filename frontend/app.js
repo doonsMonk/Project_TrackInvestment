@@ -60,6 +60,7 @@ const ASSET_CLASSES = [
   { kind: 'INS', label: 'Insurance', one: 'policy', many: 'policies' },
 ];
 let BASE = 'INR'; // portfolio currency, confirmed by the server on boot
+const DEVICE = /Android|iPhone|iPad/i.test(navigator.userAgent) ? 'phone' : 'computer'; // for the lock-screen wording
 
 function load(key, fallback) {
   try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
@@ -253,15 +254,33 @@ function allocationParts(t) {
   const parts = classes
     .map((c, i) => ({ ...c, color: colors[i % colors.length], ...(bk[c.kind] || { count: 0, invested: 0, current_value: 0 }) }))
     .filter((p) => p.count > 0);
-  const total = parts.reduce((s, p) => s + Math.max(0, p.current_value), 0);
-  parts.forEach((p) => { p.share = total ? (Math.max(0, p.current_value) / total) * 100 : 0; });
-  return { parts, total };
+  const hidden = allocHidden();
+  parts.forEach((p) => { p.picked = !hidden.has(p.kind); });
+  return allocShares({ parts });
 }
+
+/** Classes the user has unticked in the allocation list, remembered between visits. */
+function allocHidden() {
+  try { return new Set(JSON.parse(load('allocHidden', '[]'))); } catch { return new Set(); }
+}
+
+/** The ring shows the ticked classes only: their total, and each class's share of it. */
+function allocShares(alloc) {
+  const picked = alloc.parts.filter((p) => p.picked);
+  const total = picked.reduce((s, p) => s + Math.max(0, p.current_value), 0);
+  alloc.parts.forEach((p) => { p.share = p.picked && total ? (Math.max(0, p.current_value) / total) * 100 : 0; });
+  alloc.total = total;
+  alloc.picked = picked;
+  return alloc;
+}
+
+const allocShareText = (p) => `${p.count} ${p.count === 1 ? p.one : p.many} · invested ${fmtINR(p.invested)}${p.picked ? ` · ${p.share.toFixed(1)}%` : ' · not in the ring'}`;
+const allocSummary = (alloc) => (alloc.picked.length ? alloc.picked.map((p) => `${p.label} ${fmtINR(p.current_value)} (${p.share.toFixed(1)}%)`).join(', ') : 'nothing ticked');
 
 function allocationSection(t, alloc) {
   const rows = alloc.parts
     .map(
-      (p) => `<div class="kv-row"><i class="swatch" style="background:${p.color}"></i><span>${esc(p.label)}</span><span class="muted small">${p.count} ${p.count === 1 ? p.one : p.many} · invested ${fmtINR(p.invested)} · ${p.share.toFixed(1)}%</span><b>${fmtINR(p.current_value)}</b></div>`,
+      (p) => `<div class="kv-row${p.picked ? '' : ' alloc-off'}" data-kind="${esc(p.kind)}"><input type="checkbox" class="alloc-pick" data-kind="${esc(p.kind)}" ${p.picked ? 'checked' : ''} aria-label="Show ${esc(p.label)} in the ring"><i class="swatch" style="background:${p.color}"></i><span>${esc(p.label)}</span><span class="muted small alloc-share">${allocShareText(p)}</span><b>${fmtINR(p.current_value)}</b></div>`,
     )
     .join('');
   const currencyRows = (t.currencies || [])
@@ -269,30 +288,59 @@ function allocationSection(t, alloc) {
       (c) => `<div class="kv-row currency-row"><span>${esc(c.currency)} holdings</span><span class="muted small">${c.count} stock${c.count === 1 ? '' : 's'} · ${fmtMoney(c.current_value, c.currency)} · 1 ${esc(c.currency)} = ${fmtINR(c.rate, 2)} on ${fmtDate(c.rate_date)}</span><b>${fmtINR(c.current_value_base)}</b></div>`,
     )
     .join('');
-  const summary = alloc.parts.map((p) => `${p.label} ${fmtINR(p.current_value)} (${p.share.toFixed(1)}%)`).join(', ');
   return `
     <section class="card">
-      <div class="card-head"><h2>Allocation</h2><span class="muted small">current value by asset class, in ${esc(BASE)}</span></div>
+      <div class="card-head"><h2>Allocation</h2><span class="muted small">current value by asset class, in ${esc(BASE)} · untick a class to leave it out of the ring</span></div>
       <div class="alloc-grid">
-        <div class="donut-wrap"><canvas id="alloc-chart" role="img" aria-label="Allocation: ${esc(summary)}"></canvas></div>
+        <div class="donut-wrap"><canvas id="alloc-chart" role="img" aria-label="Allocation: ${esc(allocSummary(alloc))}"></canvas><p class="empty small donut-empty" hidden></p></div>
         <div class="kv-list alloc-list">${rows}${currencyRows}</div>
       </div>
     </section>`;
 }
 
+/** Draw the ring from the ticked classes (or say why there is nothing to draw). */
 function mountDonut(alloc) {
   const canvas = document.getElementById('alloc-chart');
   if (!canvas) return;
   const wrap = canvas.closest('.donut-wrap');
-  if (!alloc.total) {
-    wrap.innerHTML = '<p class="empty small">Nothing valued yet.</p>';
-    return;
+  const empty = wrap.querySelector('.donut-empty');
+  if (state.donut) {
+    state.donut.destroy();
+    state.donut = null;
   }
-  if (!window.Chart) {
-    wrap.innerHTML = '<p class="empty small">Chart library did not load; the list on the right has the figures.</p>';
-    return;
-  }
-  state.donut = donutChart(canvas, alloc.parts.map((p) => ({ label: p.label, value: p.current_value, color: p.color })), { currency: BASE, centreLabel: 'current value' });
+  canvas.setAttribute('aria-label', `Allocation: ${allocSummary(alloc)}`);
+  const message = !alloc.parts.length ? 'Nothing valued yet.'
+    : !alloc.picked.length ? 'Nothing ticked: tick a class on the right to draw it.'
+    : !alloc.total ? 'The ticked classes have no value yet.'
+    : !window.Chart ? 'Chart library did not load; the list on the right has the figures.'
+    : '';
+  canvas.hidden = Boolean(message);
+  empty.hidden = !message;
+  empty.textContent = message;
+  if (message) return;
+  state.donut = donutChart(canvas, alloc.picked.map((p) => ({ label: p.label, value: p.current_value, color: p.color })), { currency: BASE, centreLabel: 'current value' });
+}
+
+/** The tick boxes in the allocation list: redraw the ring and the shares from the ticked classes, and remember the choice. */
+function wireAllocationPicks(alloc) {
+  const list = document.querySelector('.alloc-list');
+  if (!list) return;
+  list.addEventListener('change', (e) => {
+    const box = e.target.closest('.alloc-pick');
+    if (!box) return;
+    const part = alloc.parts.find((p) => p.kind === box.dataset.kind);
+    if (!part) return;
+    part.picked = box.checked;
+    save('allocHidden', JSON.stringify(alloc.parts.filter((p) => !p.picked).map((p) => p.kind)));
+    allocShares(alloc);
+    alloc.parts.forEach((p) => {
+      const row = list.querySelector(`.kv-row[data-kind="${CSS.escape(p.kind)}"]`);
+      if (!row) return;
+      row.classList.toggle('alloc-off', !p.picked);
+      row.querySelector('.alloc-share').textContent = allocShareText(p);
+    });
+    mountDonut(alloc);
+  });
 }
 
 async function renderPortfolio() {
@@ -343,7 +391,7 @@ async function renderPortfolio() {
     const native = (v) => (foreign ? `<div class="sub-amount">${fmtMoney(v, cur)}</div>` : '');
     const nameCell = `<td><div class="fund-name">${anyStock ? kindChip(f) : ''}${esc(f.name)}</div><div class="muted small">${esc(sub)}</div></td>`;
     const xirrCell = `<td class="num">${fmtPct(pct(bs?.xirr))}${foreign && bs ? `<div class="sub-amount">${fmtPct(pct(s.xirr))} in ${esc(cur)}</div>` : ''}</td>`;
-    const editCell = `<td class="row-actions"><button type="button" class="link-btn" data-edit-fund="${f.id}" title="Edit name, scheme or symbol, folio or status">Edit</button></td>`;
+    const editCell = `<td class="row-actions col-edit"><button type="button" class="link-btn" data-edit-fund="${f.id}" title="Edit name, scheme or symbol, folio or status">Edit</button></td>`;
     return { k, s, cur, foreign, bs, native, nameCell, xirrCell, editCell };
   };
   const kindsOf = (list) => {
@@ -384,7 +432,7 @@ async function renderPortfolio() {
     const invested = sums.reduce((s, x) => s + x.invested, 0);
     const value = sums.reduce((s, x) => s + x.current_value, 0);
     const x = t.by_kind?.[c.kind]?.active_xirr;
-    return `<tr class="group-total"><td colspan="2">${esc(c.label)}</td><td class="num">${fmtINR(invested)}</td><td class="num">${fmtINR(value)}</td><td class="num">${deltaValue(invested ? value - invested : null)}</td><td class="num" title="Annualised return of these holdings together, in ${esc(BASE)}">${fmtPct(pct(x))}</td><td colspan="2"></td></tr>`;
+    return `<tr class="group-total"><td>${esc(c.label)}</td><td class="col-status"></td><td class="num col-invested">${fmtINR(invested)}</td><td class="num">${fmtINR(value)}</td><td class="num">${deltaValue(invested ? value - invested : null)}</td><td class="num" title="Annualised return of these holdings together, in ${esc(BASE)}">${fmtPct(pct(x))}</td><td class="col-latest"></td><td class="col-edit"></td></tr>`;
   };
   const closedSubtotal = (c, group) => {
     const sums = group.map(inrOf).filter(Boolean);
@@ -392,7 +440,7 @@ async function renderPortfolio() {
     const sold = sums.reduce((s, x) => s + x.redeemed, 0);
     const realised = sums.reduce((s, x) => s + x.realised_total, 0);
     const x = t.by_kind?.[c.kind]?.closed_xirr;
-    return `<tr class="group-total"><td colspan="2">${esc(c.label)}</td><td class="num">${fmtINR(bought)}</td><td class="num">${fmtINR(sold)}</td><td class="num">${deltaValue(realised)}</td><td class="num" title="Annualised return of these closed holdings together, in ${esc(BASE)}">${fmtPct(pct(x))}</td><td></td></tr>`;
+    return `<tr class="group-total"><td>${esc(c.label)}</td><td class="col-status"></td><td class="num">${fmtINR(bought)}</td><td class="num">${fmtINR(sold)}</td><td class="num">${deltaValue(realised)}</td><td class="num" title="Annualised return of these closed holdings together, in ${esc(BASE)}">${fmtPct(pct(x))}</td><td class="col-edit"></td></tr>`;
   };
   const activeRow = (f) => {
       const { k, s, cur, bs, native, nameCell, xirrCell, editCell } = rowBits(f);
@@ -400,12 +448,12 @@ async function renderPortfolio() {
       return `
         <tr class="row-link" data-href="#/fund/${f.id}" tabindex="0">
           ${nameCell}
-          <td>${statusBadge(f)}</td>
-          <td class="num">${bs ? fmtINR(bs.invested) : '–'}${native(s.invested)}</td>
+          <td class="col-status">${statusBadge(f)}</td>
+          <td class="num col-invested">${bs ? fmtINR(bs.invested) : '–'}${native(s.invested)}</td>
           <td class="num">${bs ? fmtINR(bs.current_value) : '–'}${native(s.current_value)}</td>
           <td class="num">${bs ? deltaValue(bs.invested ? bs.profit : null) : '–'}<div class="muted small">${bs ? fmtPct(bs.abs_return_pct) : ''}${taken ? ` · ${taken}` : ''}</div></td>
           ${xirrCell}
-          <td class="num muted small">${isNum(s.latest_nav) ? `${fmtMoney(s.latest_nav, cur, k.priceDecimals)}<br>${fmtDate(s.latest_nav_date)}` : f.kind === 'NPS' && f.schemes?.length ? f.schemes.map((p) => `${esc(p.scheme)} ${isNum(p.summary.latest_nav) ? fmtNum(p.summary.latest_nav, 2) : '–'}`).join('<br>') : f.kind === 'EPF' || f.kind === 'PPF' ? `${fmtINR(s.interest)}<br>interest` : '–'}</td>
+          <td class="num muted small col-latest">${isNum(s.latest_nav) ? `${fmtMoney(s.latest_nav, cur, k.priceDecimals)}<br>${fmtDate(s.latest_nav_date)}` : f.kind === 'NPS' && f.schemes?.length ? f.schemes.map((p) => `${esc(p.scheme)} ${isNum(p.summary.latest_nav) ? fmtNum(p.summary.latest_nav, 2) : '–'}`).join('<br>') : f.kind === 'EPF' || f.kind === 'PPF' ? `${fmtINR(s.interest)}<br>interest` : '–'}</td>
           ${editCell}
         </tr>`;
     };
@@ -415,7 +463,7 @@ async function renderPortfolio() {
       return `
         <tr class="row-link" data-href="#/fund/${f.id}" tabindex="0">
           ${nameCell}
-          <td>${statusBadge(f)}</td>
+          <td class="col-status">${statusBadge(f)}</td>
           <td class="num">${bs ? fmtINR(bs.purchased) : '–'}${native(s.purchased)}</td>
           <td class="num">${bs ? fmtINR(bs.redeemed) : '–'}${native(s.redeemed)}</td>
           <td class="num">${bs ? deltaValue(bs.realised_total) : '–'}<div class="muted small">${bs?.dividends ? `incl. ${fmtINR(bs.dividends)} ${k.dividendWord || 'dividends'}` : ''}</div></td>
@@ -473,16 +521,16 @@ async function renderPortfolio() {
       <div class="card-head"><div class="filter-bar"><h2>Holdings</h2>${tabs}</div><button type="button" class="btn primary small" id="btn-add-fund-inline">+ Add fund / stock</button></div>
       <div class="table-wrap" id="holdings-active" ${tab === 'active' ? '' : 'hidden'}>
         ${activeFunds.length ? `
-        <table class="data">
-          <thead><tr><th>Holding</th><th>Status</th><th class="num">Invested</th><th class="num">Current value</th><th class="num">P&amp;L</th><th class="num">XIRR</th><th class="num">Latest ${anyStock ? 'NAV / price' : 'NAV'}</th><th></th></tr></thead>
+        <table class="data holdings">
+          <thead><tr><th>Holding</th><th class="col-status">Status</th><th class="num col-invested">Invested</th><th class="num">Current value</th><th class="num">P&amp;L</th><th class="num">XIRR</th><th class="num col-latest">Latest ${anyStock ? 'NAV / price' : 'NAV'}</th><th class="col-edit"></th></tr></thead>
           <tbody>${rows}</tbody>
-          <tfoot><tr><td colspan="2">Total${anyStock ? ` (${esc(BASE)})` : ''}</td><td class="num">${fmtINR(t.invested)}</td><td class="num">${fmtINR(t.current_value)}</td><td class="num">${deltaValue(t.invested ? t.profit : null)}</td><td class="num">${fmtPct(pct(t.xirr))}</td><td colspan="2"></td></tr></tfoot>
+          <tfoot><tr><td>Total${anyStock ? ` (${esc(BASE)})` : ''}</td><td class="col-status"></td><td class="num col-invested">${fmtINR(t.invested)}</td><td class="num">${fmtINR(t.current_value)}</td><td class="num">${deltaValue(t.invested ? t.profit : null)}</td><td class="num">${fmtPct(pct(t.xirr))}</td><td class="col-latest"></td><td class="col-edit"></td></tr></tfoot>
         </table>` : '<p class="empty">Nothing held at the moment. Everything you had is under Closed.</p>'}
       </div>
       ${closedFunds.length ? `
       <div class="table-wrap" id="holdings-closed" ${tab === 'closed' ? '' : 'hidden'}>
-        <table class="data">
-          <thead><tr><th>Holding</th><th>Status</th><th class="num">Bought</th><th class="num">Sold for</th><th class="num">Realised</th><th class="num">XIRR</th><th></th></tr></thead>
+        <table class="data holdings">
+          <thead><tr><th>Holding</th><th class="col-status">Status</th><th class="num">Bought</th><th class="num">Sold for</th><th class="num">Realised</th><th class="num">XIRR</th><th class="col-edit"></th></tr></thead>
           <tbody>${closedRows}</tbody>
         </table>
         <p class="muted small" style="margin-top:8px">Closed holdings were sold out completely. Their transactions, realised gains and dividends are kept and still count in the totals above; adding a purchase reopens one.</p>
@@ -491,6 +539,7 @@ async function renderPortfolio() {
 
   mountChart(data.history, BASE);
   mountDonut(alloc);
+  wireAllocationPicks(alloc);
   wireRange(app);
   app.querySelectorAll('[data-tab]').forEach((b) =>
     b.addEventListener('click', () => {
@@ -828,7 +877,7 @@ function insCard(f, cur) {
   return `
     <section class="card">
       <div class="card-head"><h2>Policy details</h2><span class="muted small">from the policy document: premiums on a schedule, a maturity value known in advance</span></div>
-      <div class="table-wrap"><table class="data"><tbody>${rows}</tbody></table></div>
+      <div class="table-wrap"><table class="data kv-table"><tbody>${rows}</tbody></table></div>
     </section>`;
 }
 
@@ -855,7 +904,7 @@ function fdCard(f, cur) {
   return `
     <section class="card">
       <div class="card-head"><h2>Deposit details</h2><span class="muted small">from the bank's FD advice: the deposit grows from the principal to the maturity value at a constant rate</span></div>
-      <div class="table-wrap"><table class="data"><tbody>${rows}</tbody></table></div>
+      <div class="table-wrap"><table class="data kv-table"><tbody>${rows}</tbody></table></div>
     </section>`;
 }
 
@@ -907,7 +956,7 @@ function goldCard(f, cur) {
   return `
     <section class="card">
       <div class="card-head"><h2>Bond details</h2><span class="muted small">Sovereign Gold Bond terms: 2.5% interest a year on the issue price, eight-year tenor, early redemption from the fifth year</span></div>
-      <div class="table-wrap"><table class="data"><tbody>${rows}</tbody></table></div>
+      <div class="table-wrap"><table class="data kv-table"><tbody>${rows}</tbody></table></div>
     </section>`;
 }
 
@@ -2717,7 +2766,7 @@ function renderLock() {
     <section class="card auth-card">
       <div class="auth-icon">${SHIELD_ICON}</div>
       <h1>Unlock your portfolio</h1>
-      <p class="muted">Your data is encrypted on this computer. Enter your password to open it.</p>
+      <p class="muted">Your data is encrypted on this ${DEVICE}. Enter your password to open it.</p>
       ${authInfo.notice?.message ? `<div class="banner warn" style="text-align:left">${esc(authInfo.notice.message)}</div>` : ''}
       <form id="unlock-form" class="form" novalidate>
         <label class="field">Password
@@ -2940,7 +2989,7 @@ function renderSetup() {
     <section class="card auth-card">
       <div class="auth-icon">${SHIELD_ICON}</div>
       <h1>Protect your data with a password</h1>
-      <p class="muted">Everything you enter is stored encrypted on this computer and can only be opened with this password.</p>
+      <p class="muted">Everything you enter is stored encrypted on this ${DEVICE} and can only be opened with this password.</p>
       ${legacy}
       <form id="setup-form" class="form" novalidate>
         <label class="field">Password
