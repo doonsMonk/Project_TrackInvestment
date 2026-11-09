@@ -239,6 +239,12 @@ table.data .num { text-align: right; font-variant-numeric: tabular-nums; white-s
 table.data .nowrap { white-space: nowrap; }
 table.data.kv-table { min-width: 0; } /* label / value cards: fit the screen and wrap */
 table.data.kv-table td { white-space: normal; }
+table.data.holdings td.num > div { white-space: normal; max-width: 260px; margin-left: auto; } /* the P&L note (realised…) wraps instead of widening the table */
+@media (max-width: 900px) {
+  /* a tablet held upright: Status and the latest price go, the money columns and XIRR stay */
+  table.data.holdings { min-width: 0; }
+  table.data.holdings .col-status, table.data.holdings .col-latest { display: none; }
+}
 @media (max-width: 640px) {
   /* a phone keeps the holding, its value, P&L and XIRR; status, invested, latest price and Edit live on the holding's page */
   table.data.holdings { min-width: 0; }
@@ -248,7 +254,7 @@ table.data.kv-table td { white-space: normal; }
   table.data.holdings td:first-child { padding-left: 0; }
   table.data.holdings td:last-of-type, table.data.holdings th:last-of-type { padding-right: 0; }
   table.data.holdings .fund-name { white-space: normal; min-width: 0; }
-  table.data.holdings td.num > div { white-space: normal; max-width: 150px; } /* the P&L note (realised…) wraps instead of widening the table */
+  table.data.holdings td.num > div { max-width: 150px; }
   .kind-toggle { flex-wrap: wrap; border-radius: 16px; }
   .head-actions { flex-wrap: wrap; }
 }
