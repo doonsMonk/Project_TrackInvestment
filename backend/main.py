@@ -44,7 +44,7 @@ async def lifespan(_: FastAPI):
     db.vault.lock()  # flush and forget the key on shutdown
 
 
-VERSION = "0.15.0"
+VERSION = "0.15.1"
 app = FastAPI(title="Investment Tracker", version=VERSION, lifespan=lifespan)
 
 
@@ -163,8 +163,20 @@ def cloud_callback(state: str = "", code: str = "", error: str = "", error_descr
     except cloud.CloudError as e:
         return page.format(f"<h2>Sign-in failed</h2><p>{e}</p><p>Close this tab and try again in the app.</p>")
     label = cloud.PROVIDERS[result["provider"]]["label"]
-    cloud.schedule_backup(1.0)
-    return page.format(f"<h2>{label} connected</h2><p>Signed in as <b>{result['account']}</b>. The vault will be backed up there after every change.</p><p>You can close this tab and return to the app.</p>")
+    # A fresh connection uploads this device's file only when the cloud holds nothing, or a copy from this very
+    # device. A copy from another device (the PC's, when a phone connects) is left alone: the dialog then offers
+    # Restore, or Back up now to replace it deliberately.
+    try:
+        remote = cloud.remote_info(result["provider"])
+    except cloud.CloudError:
+        remote = None
+    if remote and (remote.get("device") or "") != cloud.device_name():
+        note = (f"The cloud already holds a copy saved from <b>{remote.get('device') or 'another device'}</b>, so nothing was uploaded. "
+                "In the app, choose <b>Restore</b> to take that copy, or <b>Back up now</b> to replace it with this device's file.")
+    else:
+        cloud.schedule_backup(1.0)
+        note = "The vault will be backed up there after every change."
+    return page.format(f"<h2>{label} connected</h2><p>Signed in as <b>{result['account']}</b>. {note}</p><p>You can close this tab and return to the app.</p>")
 
 
 @app.post("/api/cloud/backup")

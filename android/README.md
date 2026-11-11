@@ -65,6 +65,18 @@ The print adapter renders the live page, and printing switches the page's colour
 The page's colour-scheme listener therefore ignores that change on the print route; before it did, the flip
 re-rendered the report from scratch and the print preview showed its "Preparing the report…" placeholder.
 
+## Cloud sign-in
+
+The Cloud dialog's Connect button calls `AndroidApp.openUrl(url)`, which opens the provider's sign-in page in the
+phone's browser (Google refuses sign-ins inside a WebView). The provider then sends the browser to the app's own
+address, `http://127.0.0.1:8000/api/cloud/callback`, which the backend inside the app answers. Android freezes an
+app within seconds of it leaving the screen (`dumpsys activity processes` shows `isFrozen=true`), so `openUrl` also
+starts `SignInService`, a foreground service of type `dataSync` with a small "Finishing the cloud sign-in"
+notification, which keeps the process running; `MainActivity.onResume` stops it when the user comes back, and it
+stops itself after five minutes. Without a `POST_NOTIFICATIONS` grant (Android 13+) the notification stays hidden,
+but the service still runs. The OAuth client itself comes from `backend/cloud_builtin.json` (git-ignored) when the
+build carried it; see `docs/PUBLISHING.md`.
+
 ## Testing on a phone over Wi-Fi
 
 When the PC's USB ports are blocked, Android 11+ can be debugged over Wi-Fi (phone and PC on the same network):

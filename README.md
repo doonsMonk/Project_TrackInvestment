@@ -11,7 +11,8 @@ Chaquopy, the frontend in a WebView, the vault opened from or saved to any file.
 Everything runs on your machine. Data lives in one password-encrypted file under `data/` (or a folder you choose,
 such as a cloud-synced one, via Change folder… on the lock screen / `settings.json`), and can be backed up to the
 user's own Google Drive, OneDrive or Dropbox after every change (`backend/cloud.py`: OAuth 2.0 with PKCE on the
-loopback address, scopes limited to the app's folder, `/api/cloud/*`); nothing is
+loopback address, scopes limited to the app's folder, `/api/cloud/*`; the published Google client ships inside the
+release builds from the git-ignored `backend/cloud_builtin.json`, see `docs/PUBLISHING.md`); nothing is
 sent anywhere except NAV lookups to the public AMFI-backed API, price / exchange-rate lookups to
 Yahoo Finance and NPS NAV lookups to NPS Trust.
 

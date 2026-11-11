@@ -37,7 +37,11 @@ MIN_PASSWORD_LEN = 8
 
 
 def _settings_path() -> Path:
-    """settings.json next to the exe (packaged) or in the project folder (dev checkout)."""
+    """settings.json next to the exe (packaged) or in the project folder (dev checkout); INVESTMENT_TRACKER_SETTINGS
+    names another file (test servers keep their hands off the real one)."""
+    override = os.environ.get("INVESTMENT_TRACKER_SETTINGS")
+    if override:
+        return Path(override)
     base = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
     return base / "settings.json"
 

@@ -6,8 +6,11 @@ versions remain in the folder's history on GitHub.
 
 | File | For | Version | Size | SHA-256 |
 |---|---|---|---|---|
-| `InvestmentTracker-0.15.0.exe` | Windows 10 / 11 PC | 0.15.0 | 44 MB | `4e21a9da0268354c438cd6c9eca4be4357f2d1f753b8b98fe902b55afb09293c` |
-| `InvestmentTracker-0.15.0.apk` | Android phone or tablet, Android 7.0 or later | 0.15.0 | 54 MB | `88759bef36f2df22fce1e11b8201adfb2bdb20a5b1918341653be94a10930345` |
+| `InvestmentTracker-0.15.1.exe` | Windows 10 / 11 PC | 0.15.1 | 44 MB | `79181b3153d68aeaea1970ed3e71c87c4e0db6c4c32119916419a4f270d0d8eb` |
+| `InvestmentTracker-0.15.1.apk` | Android phone or tablet, Android 7.0 or later | 0.15.1 | 55 MB | `7e6e22126faf9c2d6b0043d270dd3aaafe56fea0073b109d39a137c5e5d7a060` |
+
+Both builds carry the published Google Drive sign-in: in the app, **Cloud** shows Google Drive as ready to connect,
+with no set-up step.
 
 Both are built from the same source: the Windows exe by `build_exe.bat`, the APK by the Gradle project under
 `android/`. The version is shown in the app's top bar.
@@ -34,4 +37,4 @@ Both are built from the same source: the Windows exe by `build_exe.bat`, the APK
 
 ## Checking a download
 
-On Windows, in PowerShell: `Get-FileHash .\InvestmentTracker-0.15.0.exe` and compare the hash with the table.
+On Windows, in PowerShell: `Get-FileHash .\InvestmentTracker-0.15.1.exe` and compare the hash with the table.

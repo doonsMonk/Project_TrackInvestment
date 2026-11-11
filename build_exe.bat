@@ -15,12 +15,20 @@ if not exist "assets\icon.ico" (
   .venv\Scripts\python.exe tools\make_icon.py || goto :fail
 )
 
+rem The OAuth clients a build ships with (backend\cloud_builtin.json, kept out of git) go in when the file exists.
+set BUILTIN=
+if exist "backend\cloud_builtin.json" (
+  echo Including the built-in cloud sign-in clients.
+  set BUILTIN=--add-data "backend\cloud_builtin.json;backend"
+)
+
 echo Building dist\InvestmentTracker.exe ...
 .venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --noconsole ^
   --name InvestmentTracker ^
   --icon assets\icon.ico ^
   --add-data "frontend;frontend" ^
   --add-data "assets\icon.ico;assets" ^
+  %BUILTIN% ^
   --collect-submodules uvicorn ^
   --collect-submodules anyio ^
   launcher.py || goto :fail

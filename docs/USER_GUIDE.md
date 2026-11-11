@@ -1120,13 +1120,18 @@ Nothing on the page is advice. Check it against Form 26AS / AIS and the capital 
 ### Cloud backup to Google Drive, OneDrive or Dropbox
 
 Click **Cloud** in the top bar (or **Cloud backup…** under the lock screen). The dialog lists the three
-providers. Each needs a one-time **Set up…** where you paste an OAuth client ID that you create in the provider's
-own console under your personal account; the dialog explains the exact steps for each and links to the console
-(for Google also a client secret; for Dropbox the return address `http://127.0.0.1:8000/api/cloud/callback` must be
-registered on the app you create). Then click **Connect**: the provider's normal sign-in page opens in your
+providers. Google Drive is ready to connect in the builds from the project's `release` folder: the sign-in client
+is built into the app ("Ready to connect: the sign-in is built into the app"). A provider without a built-in
+client needs a one-time **Set up…** where you paste an OAuth client ID that you create in the provider's own
+console under your personal account; the dialog explains the exact steps for each and links to the console (for
+Google also a client secret; for Dropbox the return address `http://127.0.0.1:8000/api/cloud/callback` must be
+registered on the app you create). **Use your own client…** does the same for a provider that has a built-in
+one, and your own client then takes precedence. Then click **Connect**: the provider's normal sign-in page opens in your
 browser, you allow the app access to its own folder, and the browser hands you back to the app. From then on,
 every change is uploaded a few seconds later, and the dialog shows the account, the last backup and what the
-cloud holds. The file is encrypted before it leaves the device, so the cloud only ever holds ciphertext, and the
+cloud holds. Connecting a second device does not upload its file when the cloud already holds a copy from
+another device: the dialog shows that copy and leaves the choice to you, **Restore from …** to take it, or
+**Back up now** to replace it with this device's file. The file is encrypted before it leaves the device, so the cloud only ever holds ciphertext, and the
 app can see only the folder it created (`Investment Tracker` in Google Drive, `Apps/<your app name>` in OneDrive
 and Dropbox), never your other files.
 
@@ -1173,6 +1178,10 @@ for the vault password.
   the app locks so the file's own password is needed). On the PC, the vault is in the data folder (section 21),
   which can itself be a cloud-synced folder. Copy the file in one direction at a time, and keep only one device
   open while you make changes: both apps refuse to overwrite a file that another device changed.
+- **Cloud backup** works as on the PC: **Cloud** (or **Cloud backup…** on the lock screen), then **Connect**. The
+  sign-in opens in the phone's browser; while it is open a small "Finishing the cloud sign-in" notification keeps
+  the app running, and the browser hands back to the app when the provider says it is connected. Come back to the
+  app afterwards; the dialog shows the account and the cloud copy.
 - **Prices** are fetched by the phone the same way: mutual funds, stocks, NPS and gold bonds refresh when
   older than six hours or with Refresh prices; EPF and PPF need no prices.
 - **Links** such as the Google Finance quote open in the phone's browser.
@@ -1255,6 +1264,7 @@ elsewhere still needs the password.
 | 4 Nov 2026 | Dividends are shown as realised, together with gains from sales, never inside the unrealised profit; the investment figure is also shown net of dividends received. |
 | 4 Nov 2026 | Exit and closed holdings: an Exit button records the sale of everything held; any sale that brings the units to zero marks the holding Closed and lists it under a Closed tab on the portfolio page, keeping all its data. |
 | 4 Nov 2026 | Version 0.4.0: the version is shown in the top bar; upgrades can no longer show stale screens (the window cache is cleared on start and the server forbids caching), and starting a newer exe replaces an older instance that is still running. |
+| 11 Nov 2026 | Version 0.15.1: the Google Drive sign-in is built into the app. The Google OAuth app is published, and the builds carry its client, so Cloud shows Google Drive as ready to connect with no Set up step; Use your own client… still lets you paste a client of your own. On Android the sign-in page opens in the phone's browser and hands back to the app; a short-lived notification keeps the app running meanwhile, since Android would otherwise freeze it before the browser could hand back. Connecting a device no longer uploads its file over a copy that another device saved; the dialog offers Restore or Back up now instead. |
 | 11 Nov 2026 | Ready builds in the project's `release` folder on GitHub: the Windows exe and the Android APK of the current version, with install, upgrade and checksum notes, so a PC, phone or tablet can download and install the app without building it. |
 | 10 Nov 2026 | Version 0.15.0: capital gains and tax. A Tax button opens a page for any financial year: every sale split into the lots it took (oldest first) and sorted into section 111A, 112A, 112 or the slab rate by the holding's tax class (equity, debt, other, gold bond) and the dates, with grandfathering, indexation and section 50AA where they apply; losses set off, the ₹1.25 lakh equity exemption, the estimated tax with cess; dividends, interest and payouts marked slab rate, exempt or needs a look (fixed deposit interest accrued each year, the 10(10D) check on a policy, the EPF ₹2.5 lakh rule); 80C and 80CCD deductions; what a sale today would be, short- and long-term, and when lots turn long-term; a Tax treatment field on a fund to override the class; a Capital gains and tax section in the print report and in the Tax year preset. |
 | 10 Nov 2026 | Version 0.14.2: Android printing fixed after the first run on a tablet. The print dialog's preview and the saved PDF showed the report's "Preparing the report…" placeholder instead of the report, because printing switches the page's colour scheme and the page re-rendered the report from scratch; the report now stays as it is while printing. Android's print dialog starts on A4 paper. On a phone the SIP schedule table shows one block per schedule instead of four narrow columns, and a paused schedule no longer counts its unrecorded instalments as recorded. Tested on a Samsung tablet and a Motorola phone: CAS import, SIP schedules and the Due banner, printing and saving a PDF, the file picker and the fingerprint offer on the lock screen (which only appears once the device has a screen lock and a fingerprint enrolled). |

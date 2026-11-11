@@ -87,13 +87,21 @@ delete only the specific Google Drive files you use with this app", with your ho
   A new app is in **Development** status, which allows up to 50 users; **Apply for production** on the app's page
   asks for the app's description and the same pages, and Dropbox reviews it (usually a few days).
 
-## 4. Give the app the client to use
+## 4. Build the client into the app
 
-Today each user pastes the client ID (and, for Google, the secret) in the app's **Cloud → Set up…** dialog, which
-stores them in `settings.json`. For people you share the builds with, send them the client ID and secret to paste
-in, or ask for a build with the client built in: the backend reads a default from the build so that the dialog's
-Set up step disappears for Google. Keep the client ID and secret out of the public site and out of this
-repository's public parts; they are only ever yours to hand over.
+A build can carry the published clients, so that whoever installs it just clicks **Connect**. Put them in
+`backend/cloud_builtin.json` (git-ignored, never committed):
+
+```json
+{ "google": { "client_id": "<client id>.apps.googleusercontent.com", "client_secret": "<client secret>" } }
+```
+
+(`onedrive` and `dropbox` entries work the same way, without a secret.) `build_exe.bat` packs the file into the
+exe when it exists, and the Android build copies the whole `backend` folder, so both apps get it. In the app the
+Cloud dialog then says "Ready to connect: the sign-in is built into the app"; **Use your own client…** still lets a
+user paste a client of their own, which takes precedence, and clearing it goes back to the built-in one. For an
+installed app Google does not treat the secret as confidential, which is why shipping it is allowed; still keep the
+file out of the public site and out of anything you publish as source.
 
 ## 5. Keep the pages true
 

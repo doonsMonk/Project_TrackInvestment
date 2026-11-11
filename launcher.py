@@ -10,6 +10,7 @@ browser is used instead and a small status window offers a Quit button.
 Environment variables:
   INVESTMENT_TRACKER_NO_BROWSER=1   run the server only, no window (used by tests)
   INVESTMENT_TRACKER_DATA=<dir>     data folder (see backend/db.py)
+  INVESTMENT_TRACKER_SETTINGS=<file> settings.json to use instead of the one next to the exe (tests)
 """
 from __future__ import annotations
 

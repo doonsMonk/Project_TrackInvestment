@@ -3054,7 +3054,7 @@ async function openCloudModal() {
       : p.remote_error ? `could not check the cloud copy: ${esc(p.remote_error)}` : p.connected ? 'no backup in the cloud yet' : '';
     const line = p.connected
       ? `Connected as <b>${esc(p.account || '')}</b>${p.last_backup ? ` · last backup ${fmtWhen(p.last_backup)} (${fmtBytes(p.last_size)})` : ' · not backed up yet'}${p.last_error ? ` · <span class="danger-text">last attempt failed: ${esc(p.last_error)}</span>` : ''}`
-      : p.configured ? 'Set up, not connected' : 'Not set up';
+      : p.custom ? 'Set up with your own client, not connected' : p.builtin ? 'Ready to connect: the sign-in is built into the app' : 'Not set up';
     return `
     <div class="cloud-provider" data-provider="${key}">
       <div class="head"><b>${esc(p.label)}</b><span class="muted small">${line}</span></div>
@@ -3062,10 +3062,10 @@ async function openCloudModal() {
       ${remote ? `<div class="muted small">${remote}</div>` : ''}
       <div class="head-actions" style="margin-top:8px">
         ${p.connected ? `<button type="button" class="btn ghost small" data-act="backup">Back up now</button><button type="button" class="btn ghost small" data-act="restore" ${p.remote ? '' : 'disabled'}>Restore from ${esc(p.label)}</button><button type="button" class="btn ghost small danger-text" data-act="disconnect">Disconnect</button>` : `<button type="button" class="btn primary small" data-act="connect" ${p.configured ? '' : 'disabled'}>Connect ${esc(p.label)}</button>`}
-        <button type="button" class="btn ghost small" data-act="setup">${p.configured ? 'Change setup' : 'Set up…'}</button>
+        <button type="button" class="btn ghost small" data-act="setup">${p.custom ? 'Change setup' : p.builtin ? 'Use your own client…' : 'Set up…'}</button>
       </div>
       <form class="form cloud-setup" hidden>
-        <p class="muted small">${esc(p.setup)} <a href="${esc(p.console)}" target="_blank" rel="noopener">Open the console</a>.</p>
+        <p class="muted small">${p.builtin ? 'This app already carries a sign-in client for this provider, so nothing needs setting up. To sign in through a client of your own instead, paste its details here; clear the client ID to go back to the built-in one. ' : ''}${esc(p.setup)} <a href="${esc(p.console)}" target="_blank" rel="noopener">Open the console</a>.</p>
         <div class="form-row">
           <label class="field">Client ID<input name="client_id" value="${esc(p.client_id || '')}" maxlength="300" autocomplete="off"></label>
           ${p.needs_secret ? `<label class="field">Client secret<input name="client_secret" type="password" maxlength="300" autocomplete="off" placeholder="${p.configured ? '(unchanged)' : ''}"></label>` : ''}
@@ -3105,9 +3105,12 @@ async function openCloudModal() {
         btn.disabled = true;
         try {
           const r = await api.post('/api/cloud/connect', { provider: key });
-          const win = window.open(r.auth_url, '_blank');
+          const bridge = droid();
+          let win = null;
+          if (bridge && typeof bridge.openUrl === 'function') bridge.openUrl(r.auth_url); // the phone's browser; it comes back to the app's own address
+          else win = window.open(r.auth_url, '_blank');
           btn.textContent = 'Waiting for the sign-in in your browser…';
-          if (!win) toast('Your browser blocked the sign-in window; allow pop-ups for this app and try again', 'warn');
+          if (!win && !bridge) toast('Your browser blocked the sign-in window; allow pop-ups for this app and try again', 'warn');
           stopPolling();
           const started = Date.now();
           polling = setInterval(async () => {

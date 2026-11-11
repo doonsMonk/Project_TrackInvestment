@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from datetime import datetime, timezone
 
 from . import db
@@ -93,8 +94,42 @@ def device_name() -> str:
 
 # ---------------------------------------------------------------- settings and tokens
 
-def credentials(provider: str) -> dict:
+BUILTIN_NAME = "cloud_builtin.json"  # beside this module: the OAuth clients a build ships with, {provider: {client_id, client_secret}}
+
+
+def _builtin_all() -> dict:
+    """The clients built into this copy of the app, if the build carried the file (an env var overrides the path)."""
+    override = os.environ.get("INVESTMENT_TRACKER_CLOUD_BUILTIN")
+    candidates = [Path(override)] if override else []
+    if not override:
+        try:  # the package's own data file: a source checkout, a PyInstaller bundle, or the Android asset tree
+            from importlib import resources
+            text = resources.files(__package__).joinpath(BUILTIN_NAME).read_text(encoding="utf-8")
+            return json.loads(text) if text.strip() else {}
+        except (FileNotFoundError, OSError, ValueError, TypeError, AttributeError):
+            pass
+        candidates.append(Path(__file__).resolve().parent / BUILTIN_NAME)
+    for p in candidates:
+        try:
+            return json.loads(p.read_text(encoding="utf-8")) or {}
+        except (OSError, ValueError):
+            continue
+    return {}
+
+
+def builtin_credentials(provider: str) -> dict:
+    v = _builtin_all().get(provider)
+    return dict(v) if isinstance(v, dict) and v.get("client_id") else {}
+
+
+def custom_credentials(provider: str) -> dict:
+    """The client the user pasted in the Cloud dialog (settings.json), if any."""
     return dict((db.read_settings().get("cloud") or {}).get(provider) or {})
+
+
+def credentials(provider: str) -> dict:
+    """The client to sign in with: the user's own when set, else the one built into the app."""
+    return custom_credentials(provider) or builtin_credentials(provider)
 
 
 def set_credentials(provider: str, client_id: str, client_secret: str | None) -> None:
@@ -494,9 +529,11 @@ def status(check_remote: bool = False) -> dict:
                 remote, remote_error = cached["info"], cached["error"]
         newer_remote = bool(remote and remote.get("modified") and local and remote["modified"] > local["modified"]
                             and (remote.get("device") or "") != device_name())
+        custom = custom_credentials(p)
         out["providers"][p] = {
             "label": cfg["label"], "needs_secret": cfg["needs_secret"], "console": cfg["console"], "setup": cfg["setup"],
-            "configured": bool(creds.get("client_id")), "client_id": creds.get("client_id"),
+            "configured": bool(creds.get("client_id")), "client_id": custom.get("client_id"),
+            "builtin": bool(builtin_credentials(p)), "custom": bool(custom.get("client_id")),
             "connected": is_connected, "account": entry.get("account"), "connected_at": entry.get("connected_at"),
             "last_backup": entry.get("last_backup"), "last_size": entry.get("last_size"),
             "last_error": entry.get("last_error"), "last_error_at": entry.get("last_error_at"),

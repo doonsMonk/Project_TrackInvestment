@@ -167,6 +167,11 @@ class MainActivity : AppCompatActivity() {
 
     // ---- vault file actions ---------------------------------------------------------------------------------------
 
+    override fun onResume() {
+        super.onResume()
+        runCatching { SignInService.stop(this) }  // back in front: the backend no longer needs the keep-alive
+    }
+
     /** What the page may ask of the app. `print()` hands the current page (the report) to Android's print dialog,
      *  where a printer or Save as PDF can be chosen; the page's print stylesheet applies. */
     inner class Bridge {
@@ -176,6 +181,19 @@ class MainActivity : AppCompatActivity() {
                 val manager = getSystemService(Context.PRINT_SERVICE) as PrintManager
                 val name = getString(R.string.app_name)
                 manager.print(name, web.createPrintDocumentAdapter(name), PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4).build())
+            }
+        }
+
+        /** Open a web address in the phone's browser: the cloud providers' sign-in pages, which must not run inside
+         *  the WebView (Google refuses embedded sign-ins) and which send the browser back to the app's own address. */
+        @JavascriptInterface
+        fun openUrl(url: String) {
+            if (!url.startsWith("https://")) return
+            runOnUiThread {
+                // Android freezes a backgrounded app within seconds; the sign-in comes back to the app's own address,
+                // so the backend must stay up until then (SignInService stops in onResume).
+                runCatching { SignInService.start(this@MainActivity) }
+                runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
             }
         }
 
