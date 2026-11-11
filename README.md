@@ -244,6 +244,14 @@ page shows the return in both currencies.
   classifies each line (SIP, purchase, redemption, dividend, switch, tax, reversal), looks the ISIN up in mfapi.in's
   scheme list for the AMFI code (or suggests schemes by name), matches holdings by code or folio + name, flags
   entries already recorded, and the page imports through the usual fund and bulk-transaction routes
+- Capital gains and tax (`backend/tax.py`, `frontend/tax.js`): `GET /api/tax?fy=&slab=` walks every holding's lots FIFO
+  with their buy dates and sorts each piece of a sale by the holding's tax class and the dates (equity: 12 months, 111A at
+  20 %, 112A at 12.5 % above ₹1.25 lakh with 31 Jan 2018 grandfathering, 15 % / 10 % before 23 July 2024; debt bought from
+  April 2023 at the slab rate under 50AA, older units 24 months and 112 at 12.5 %, or 36 months and indexed 20 % before the
+  change; other funds 24 months; gold bonds exempt on RBI redemption, listed-bond rules on the exchange), nets the sections,
+  sets losses off, estimates the tax with cess, lists dividends / interest / payouts (FD interest accrued along the deposit's
+  curve, the 10(10D) check on a policy, the EPF ₹2.5 lakh rule, NPS / EPF withdrawals flagged), the 80C / 80CCD items and
+  the short- / long-term split of what is still held; `details.tax_class` on a fund overrides the AMFI-category class
 - Android: fingerprint or screen-lock unlock. The page asks `AndroidApp.enableBiometric(password)` once; the
   activity keeps the password AES-GCM encrypted under an Android Keystore key with `setUserAuthenticationRequired`
   (biometric strong or device credential, per use, invalidated by new enrolments), and `AndroidApp.biometricUnlock()`
@@ -316,9 +324,11 @@ backend/
   quotes.py Yahoo Finance client and price / exchange-rate cache (stocks), base currency
   nps.py    NPS Trust client (scheme list, per-scheme NAV history) cached in the quotes table
   calc.py   XIRR, FIFO lots, summaries, value history, currency conversion
+  tax.py    capital gains by section, other income, deductions and the estimated tax (Indian rules, by date)
 frontend/
   index.html, styles.css          shell and theme tokens (light + dark)
   app.js                          hash router, portfolio and holding views, forms (kind-aware wording)
+  tax.js                          the #/tax page and the tax section of the print report
   import.js, parse.js             paste-a-table import dialog and its (DOM-free) parsing helpers
   charts.js                       Chart.js line chart and segmented bar (currency-aware)
   api.js, format.js, ui.js        fetch wrapper, multi-currency / date formatting, modal + toast
@@ -342,6 +352,7 @@ data/                             portfolio.enc (encrypted database, created on 
 | POST | `/api/cloud/restore` | Replace this device's vault with the cloud copy (previous file kept) |
 | DELETE | `/api/cloud/{provider}` | Forget the sign-in |
 | POST | `/api/import/cas` | Read a CAMS / KFintech CAS PDF: schemes with their matches and candidate codes, transactions in the app's terms with `existing_id` for ones already recorded, skipped lines with the reason |
+| GET | `/api/tax` | One financial year's capital gains (`?fy=2025-26`, default the current year; `slab=` the marginal rate for slab-taxed items): every sale's lots with term, section, rate and taxable gain; the sections netted with set-off and the 112A exemption; other income and deductions; the estimated tax; the short- / long-term split of open holdings; each holding's tax class and why |
 | GET | `/api/sgb/issues` | Every Sovereign Gold Bond series on the exchange list (symbol, name, issue date and price, latest price, interest dates) |
 | GET | `/api/gold/price` | The gold price per gram (latest, or `?on=` a date) and the recent entries |
 | POST | `/api/gold/price` | Record the gold price per gram for a date (`{date, price}`) |

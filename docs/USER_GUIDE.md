@@ -1007,6 +1007,8 @@ or into a PDF. A dialog lets you choose exactly what goes in:
   - **Income and realised gains** – per holding for the chosen period: dividends and interest received,
     interest credited (EPF, PPF), sale and payout proceeds, the realised gain of those sales (FIFO, as the
     app computes it everywhere) and charges, with a total. The thing to hand to whoever does your tax.
+  - **Capital gains and tax** – the whole portfolio's sales by section with the estimated tax, dividends,
+    interest and deductions, for the financial year the period ends in (section 20).
   - **Transactions** – every entry of the chosen period, oldest first, with each sale's realised gain and,
     if you leave the box ticked, your comments.
   - **Upcoming dates** – deposit and policy maturities, premiums due, bond interest dates, early-redemption
@@ -1022,14 +1024,82 @@ or into a PDF. A dialog lets you choose exactly what goes in:
 **Preview** opens the report as a page of its own, on white whatever theme you use, with a toolbar on top:
 **Print / save as PDF** opens your computer's print dialog, where any printer or *Save as PDF* can be
 chosen; **Change what is printed…** reopens the dialog with your choices; **Back** returns to where you
-were. On a phone or tablet the same button opens Android's print dialog, which also offers Save as PDF.
+were. On a phone or tablet the same button opens Android's print dialog, set to A4 paper, which also offers
+Save as PDF (the file lands in the folder you pick, Download by default).
 What you see in the preview is what prints: tables carry their headings onto every page, and rows are not
 split across pages. The choices are remembered for next time. Prices are the ones the app holds at that
 moment, so click **Refresh prices** first if you want today's.
 
 ---
 
-## 20. Your data: where it is, backups and safety
+## 20. Capital gains and tax
+
+Click **Tax** in the top bar for one financial year's capital gains, the dividends and interest of the year, the
+payments that qualify for a deduction and an estimate of the tax, all worked out from the entries in the app under
+the rules for an individual resident in India. Pick the **year** (every year with an entry is listed) and your
+**slab rate** (the rate the last rupee of your income is taxed at; it applies to the items taxed at the slab rate
+and is remembered on this device).
+
+What the page shows:
+
+- **Tiles** – the estimated tax (on gains, on income, and the cess), short-term and long-term equity gains with
+  the exemption used, other gains, slab-rate income, exempt income, and any loss to carry forward.
+- **Capital gains by section** – gains, losses, set-off, exemption, taxable amount, rate and tax for each section
+  of the Income-tax Act: 111A (short-term equity), 112A (long-term equity), 112 (long-term, other assets) and the
+  slab rate.
+- **Every sale** – each redemption, sale or switch-out split by the lots it took (oldest units first), with when
+  those units were bought, how long they were held, the term, proceeds, cost, gain, taxable gain, section and
+  rate. A note under the line explains grandfathering, indexation or section 50AA where they apply.
+- **Dividends, interest and payouts** – IDCW and dividends, gold bond and fixed deposit interest (accrued each year
+  along a cumulative deposit's curve, or paid out), EPF and PPF interest, insurance payouts and withdrawals, each
+  marked *Slab rate*, *Exempt* or *Needs a look* with the reason.
+- **Deductions** – ELSS purchases, PPF deposits, the EPF employee share and life insurance premiums (section 80C)
+  and NPS contributions (80CCD), with the limits.
+- **If you sold today** – for every holding that capital gains tax applies to, how many units are short-term and
+  how many long-term right now, the gain of each part at the latest price, and the day the oldest short-term lot
+  turns long-term; also how much of the year's equity exemption is still free.
+- **How each holding is treated** – the tax class of each holding and where it came from.
+- **The rules applied** – the list below, as it applies to the chosen year.
+
+The rules, as the app applies them:
+
+- **Equity** – listed shares and equity-oriented funds (more than 65 % in Indian shares, which includes aggressive
+  hybrid, arbitrage, balanced advantage and equity savings funds): long-term after 12 months. Short-term gains are
+  taxed at 20 % (section 111A), long-term gains at 12.5 % on the part above ₹1.25 lakh a year (section 112A); for
+  sales before 23 July 2024 the rates are 15 % and 10 % (exemption ₹1 lakh up to FY 2023-24). Units bought before
+  1 February 2018 take the 31 January 2018 price as their cost when that is higher (and not above the sale price).
+- **Debt funds** – units bought on or after 1 April 2023 are taxed at the slab rate whatever the holding period
+  (section 50AA). Older units are long-term after 24 months (36 months for sales before 23 July 2024), at 12.5 %
+  without indexation (20 % with indexation before that date); short-term gains go at the slab rate.
+- **Other funds** – gold, silver, international, multi-asset and hybrid funds that are neither equity- nor
+  debt-oriented: long-term after 24 months at 12.5 %, short-term at the slab rate; until 31 March 2025 units bought
+  from April 2023 fell under section 50AA.
+- **Sovereign Gold Bonds** – redeemed through RBI (at maturity, or on an interest date from the fifth year) the
+  gain is exempt (section 47(viic)). Sold on the exchange a bond is a listed security: long-term after 12 months at
+  12.5 %, short-term at the slab rate. Write the word "exchange" in the sale's comment so the app knows. The 2.5 %
+  interest is income at the slab rate.
+- **Losses** – a short-term loss is set off against any capital gain, a long-term loss only against long-term
+  gains; what is left can be carried forward for eight years when the return is filed in time.
+- **Other income** – dividends, gold bond and fixed deposit interest and a taxable policy payout are income from
+  other sources at the slab rate. PPF interest, EPF interest (while your contributions stay within ₹2.5 lakh a
+  year) and a policy payout within section 10(10D) (yearly premium within 10 % of the sum assured, 20 % for
+  policies issued before April 2012; add the sum assured to the policy to let the app check) are exempt. NPS, EPF
+  and PPF withdrawals follow their own rules; the page flags the ones that need a look.
+- Health and education cess of 4 % goes on the tax. Surcharge, the section 87A rebate, securities transaction tax,
+  stamp duty and the deductions' limits are not applied. Shares in another currency are taken as unlisted abroad
+  (24-month rule) at the exchange rate of each date. Where a year mixes rates, a section shows the weighted rate.
+
+**Tax class.** The app reads each fund's AMFI scheme category to decide between equity, debt and other; where the
+category is ambiguous (multi-asset, solution-oriented funds, some ETFs) the page says so. To override it, open the
+holding, click **Edit** and set **Tax treatment**; the page then shows *set by you* next to the class.
+
+**Printing.** The page's **Print / save as PDF** button prints the year's report; the print dialog's **Tax year**
+preset includes the same section, for the financial year the chosen period ends in (section 19).
+
+Nothing on the page is advice. Check it against Form 26AS / AIS and the capital gains statements of the fund houses
+(CAMS / KFintech) before filing.
+
+## 21. Your data: where it is, backups and safety
 
 - Everything is stored in a single file named **`portfolio.enc`**, inside the `data` folder next to the
   exe (or inside the project's `data` folder when running from source). If the folder next to the exe is
@@ -1083,7 +1153,7 @@ treated as a change.
 
 ---
 
-## 21. The Android app
+## 22. The Android app
 
 The same app runs on an Android phone: the backend runs inside the app, the pages are the ones you know, and the
 data is the same encrypted file, `portfolio.enc`, kept in the app's private storage. It is installed from the
@@ -1094,7 +1164,7 @@ a few seconds; after that it opens like any other app and asks for the vault pas
 - **The same data on the phone and the PC.** Long-press anywhere on a page to open the menu. **Save vault as…**
   writes the phone's vault file to a place you pick: Google Drive, OneDrive, Dropbox and the Downloads folder all
   appear in the picker. **Open vault file…** replaces the phone's vault with a file you pick (it asks first, and
-  the app locks so the file's own password is needed). On the PC, the vault is in the data folder (section 20),
+  the app locks so the file's own password is needed). On the PC, the vault is in the data folder (section 21),
   which can itself be a cloud-synced folder. Copy the file in one direction at a time, and keep only one device
   open while you make changes: both apps refuse to overwrite a file that another device changed.
 - **Prices** are fetched by the phone the same way: mutual funds, stocks, NPS and gold bonds refresh when
@@ -1120,7 +1190,7 @@ box has to be ticked again. Changing the password in the app turns fingerprint u
 reason. The vault file itself is unchanged: it is still encrypted with your password, and copying it
 elsewhere still needs the password.
 
-## 22. Tips and shortcuts
+## 23. Tips and shortcuts
 
 - **Enter** on a highlighted holding or folio row opens it; **Escape** closes any dialog.
 - Bookmark a holding's page, or a folio view of it, in your browser; the address includes both.
@@ -1131,7 +1201,7 @@ elsewhere still needs the password.
 
 ---
 
-## 23. Troubleshooting
+## 24. Troubleshooting
 
 | Problem | What to do |
 |---|---|
@@ -1158,7 +1228,7 @@ elsewhere still needs the password.
 
 ---
 
-## 24. Feature history
+## 25. Feature history
 
 | Date | Added |
 |---|---|
@@ -1179,6 +1249,8 @@ elsewhere still needs the password.
 | 4 Nov 2026 | Dividends are shown as realised, together with gains from sales, never inside the unrealised profit; the investment figure is also shown net of dividends received. |
 | 4 Nov 2026 | Exit and closed holdings: an Exit button records the sale of everything held; any sale that brings the units to zero marks the holding Closed and lists it under a Closed tab on the portfolio page, keeping all its data. |
 | 4 Nov 2026 | Version 0.4.0: the version is shown in the top bar; upgrades can no longer show stale screens (the window cache is cleared on start and the server forbids caching), and starting a newer exe replaces an older instance that is still running. |
+| 10 Nov 2026 | Version 0.15.0: capital gains and tax. A Tax button opens a page for any financial year: every sale split into the lots it took (oldest first) and sorted into section 111A, 112A, 112 or the slab rate by the holding's tax class (equity, debt, other, gold bond) and the dates, with grandfathering, indexation and section 50AA where they apply; losses set off, the ₹1.25 lakh equity exemption, the estimated tax with cess; dividends, interest and payouts marked slab rate, exempt or needs a look (fixed deposit interest accrued each year, the 10(10D) check on a policy, the EPF ₹2.5 lakh rule); 80C and 80CCD deductions; what a sale today would be, short- and long-term, and when lots turn long-term; a Tax treatment field on a fund to override the class; a Capital gains and tax section in the print report and in the Tax year preset. |
+| 10 Nov 2026 | Version 0.14.2: Android printing fixed after the first run on a tablet. The print dialog's preview and the saved PDF showed the report's "Preparing the report…" placeholder instead of the report, because printing switches the page's colour scheme and the page re-rendered the report from scratch; the report now stays as it is while printing. Android's print dialog starts on A4 paper. On a phone the SIP schedule table shows one block per schedule instead of four narrow columns, and a paused schedule no longer counts its unrecorded instalments as recorded. Tested on a Samsung tablet and a Motorola phone: CAS import, SIP schedules and the Due banner, printing and saving a PDF, the file picker and the fingerprint offer on the lock screen (which only appears once the device has a screen lock and a fingerprint enrolled). |
 | 9 Nov 2026 | Version 0.14.1: SIP schedules on mutual funds and stocks. Enter the amount, day and frequency once; the app matches recorded purchases to the instalments, shows the ones due and not yet recorded (on the holding, in the portfolio row and in a Due banner), records them in one click at the due date's NAV, and a CAS import later replaces such an instalment with the statement's exact figures. The print report's Upcoming dates list the next instalments. |
 | 9 Nov 2026 | Version 0.14.0: import a CAMS / KFintech consolidated account statement PDF. The app reads the detailed CAS on the device, matches each scheme to a holding by scheme code (through the ISIN) or by folio and name, offers to create the holdings it lacks, lists every transaction with what it becomes, leaves out tax lines and reversals, skips entries already recorded, and imports the rest with their folio, units and NAV. On a phone the PDF is picked with the system file picker. |
 | 9 Nov 2026 | Version 0.13.1: fingerprint or screen-lock unlock on Android. Tick the box on the lock screen once; from then on a fingerprint, or the device's PIN, pattern or password, opens the app, with the typed password always available. The password is kept encrypted under an Android Keystore key that only the device's own lock can use; new fingerprints, a removed screen lock or a changed app password turn it off until re-enabled. |

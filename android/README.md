@@ -58,8 +58,12 @@ is a pure-Python package, so the same parser runs on the phone.
 ## Printing
 
 The page's Print button calls `AndroidApp.print()`, a JavaScript interface on the WebView that hands the current
-page to Android's print framework (`PrintManager` with the WebView's own print adapter). The system print dialog
-offers any printer and Save as PDF; the page's print stylesheet applies.
+page to Android's print framework (`PrintManager` with the WebView's own print adapter, A4 by default). The system
+print dialog offers any printer and Save as PDF; the page's print stylesheet applies.
+
+The print adapter renders the live page, and printing switches the page's colour scheme to light while it renders.
+The page's colour-scheme listener therefore ignores that change on the print route; before it did, the flip
+re-rendered the report from scratch and the print preview showed its "Preparing the report…" placeholder.
 
 ## Testing on a phone over Wi-Fi
 

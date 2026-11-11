@@ -10,6 +10,7 @@ import { openImportModal } from './import.js';
 import { splitFolios, distribute, fyLabel } from './parse.js';
 import { openPrintModal, renderPrintPage } from './print.js';
 import { openCasImportModal } from './cas.js';
+import { renderTaxPage } from './tax.js';
 
 const app = document.getElementById('app');
 const RANGES = { '1M': 1, '3M': 3, '6M': 6, '1Y': 12, '3Y': 36, All: null };
@@ -1642,6 +1643,15 @@ function fundFormHtml(f) {
       <label class="field">Scheme code (AMFI)
         <input name="scheme_code" inputmode="numeric" pattern="[0-9]+" value="${f.scheme_code ?? ''}" placeholder="e.g. 122639">
       </label>
+      <label class="field">Tax treatment
+        <select name="tax_class">
+          <option value="">Auto: from the AMFI scheme category</option>
+          <option value="equity" ${f.details?.tax_class === 'equity' ? 'selected' : ''}>Equity-oriented (more than 65% in Indian shares)</option>
+          <option value="debt" ${f.details?.tax_class === 'debt' ? 'selected' : ''}>Debt-oriented</option>
+          <option value="other" ${f.details?.tax_class === 'other' ? 'selected' : ''}>Other: gold, silver, international, multi-asset, balanced hybrid</option>
+        </select>
+        <span class="hint">Sets the holding period and rate for capital gains on the Tax page. Leave it on Auto unless that page reads the category wrong.</span>
+      </label>
     </div>
     <div id="stock-fields" ${stock ? '' : 'hidden'}>
       ${editing ? `
@@ -2191,7 +2201,13 @@ async function openFundModal(existing) {
       kind,
       scheme_code: kind === 'MF' ? Number(fd.get('scheme_code')) || null : null,
       symbol: stock ? String(fd.get('symbol')).trim().toUpperCase() : null,
-      details: (kind === 'MF' || kind === 'STOCK') && existingDetails?.sips?.length ? { sips: existingDetails.sips } : null,
+      details: (() => {  // a fund's or stock's details carry its SIP schedules and, for a fund, the user's say on its tax class
+        if (kind !== 'MF' && kind !== 'STOCK') return null;
+        const d = {};
+        if (existingDetails?.sips?.length) d.sips = existingDetails.sips;
+        if (kind === 'MF' && fd.get('tax_class')) d.tax_class = String(fd.get('tax_class'));
+        return Object.keys(d).length ? d : null;
+      })(),
       folio_number: String(fd.get('folio_number')).trim(),
       locked: fd.get('locked') === '1',
       lock_in_until: fd.get('lock_in_until') || null,
@@ -3302,6 +3318,8 @@ async function render() {
     } else if (m) {
       const fp = new URLSearchParams(m[2] || '');
       await renderFund(Number(m[1]), fp.get('folio'), fp.get('scheme'));
+    } else if (hash.startsWith('#/tax')) {
+      await renderTaxPage(hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '');
     } else {
       const tab = new URLSearchParams(hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '').get('tab');
       if (tab === 'closed' || tab === 'active') state.holdingsTab = tab; // #/?tab=closed opens the Closed tab
@@ -3323,6 +3341,7 @@ document.getElementById('btn-print').addEventListener('click', () => {
   const m = location.hash.match(/^#\/fund\/(\d+)/);
   openPrintModal({ fundId: m ? Number(m[1]) : null });
 });
+document.getElementById('btn-tax').addEventListener('click', () => { location.hash = '#/tax'; });
 let bootPending = false;
 window.addEventListener('vault-state', () => {
   // an API call hit a locked (423) or not-yet-set-up (409) vault, e.g. after the idle auto-lock
@@ -3337,6 +3356,7 @@ document.getElementById('btn-theme').addEventListener('click', () => {
   render();
 });
 darkQuery.addEventListener('change', () => {
+  if (location.hash.startsWith('#/print')) return; // printing flips the colour scheme; the report must stay as it is
   if (state.theme === 'auto') { applyTheme(); render(); }
 });
 document.addEventListener('click', (e) => {

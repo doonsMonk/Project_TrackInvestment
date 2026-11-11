@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from .compat import field_validator, list_limits, model_validator  # pydantic v2 on the PC, v1 on Android
 
-from . import calc, cas, cloud, db, fd, gold, nav, nps, policy, quotes, sgb, sip
+from . import calc, cas, cloud, db, fd, gold, nav, nps, policy, quotes, sgb, sip, tax
 
 # In the PyInstaller build the frontend is unpacked under sys._MEIPASS; in a dev checkout it's <project>/frontend.
 _BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
@@ -44,7 +44,7 @@ async def lifespan(_: FastAPI):
     db.vault.lock()  # flush and forget the key on shutdown
 
 
-VERSION = "0.14.1"
+VERSION = "0.15.0"
 app = FastAPI(title="Investment Tracker", version=VERSION, lifespan=lifespan)
 
 
@@ -451,7 +451,9 @@ class FundIn(BaseModel):
         else:
             d = self.details if isinstance(self.details, dict) else {}
             sips = sip.clean(d.get("sips")) if self.kind in (MF, STOCK) else []  # SIP schedules live in the details
-            self.details = {"sips": sips} if sips else None
+            tax_class = d.get("tax_class") if self.kind == MF and d.get("tax_class") in tax.CLASSES else None  # equity / debt / other, when the user says so
+            details = {k: v for k, v in (("sips", sips), ("tax_class", tax_class)) if v}
+            self.details = details or None
         if self.currency:
             self.currency = self.currency.strip().upper()
             if not self.currency.isalpha():
@@ -1743,6 +1745,48 @@ def delete_txn(txn_id: int, conn: sqlite3.Connection = Depends(get_conn)):
 
 
 # ----------------------------------------------------------------- portfolio
+
+@app.get("/api/tax")
+def tax_report(fy: Optional[str] = None, slab: float = tax.SLAB_DEFAULT, conn: sqlite3.Connection = Depends(get_conn)):
+    """Capital gains, other income, deductions and the estimated tax of one financial year (default: the current
+    one), from every entry in the vault; `slab` is the user's marginal rate for the items taxed at the slab rate."""
+    today = dt.date.today()
+    fy = fy or tax.fy_of(today.isoformat())
+    try:
+        tax.fy_start_year(fy)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if not 0 <= slab <= 60:
+        raise HTTPException(status_code=422, detail="the slab rate must be between 0 and 60 per cent")
+    rows = conn.execute("SELECT * FROM funds ORDER BY name COLLATE NOCASE").fetchall()
+    holdings = []
+    for r in rows:
+        fund = _fund_dict(r)
+        txns = _txns(conn, fund["id"])
+        latest = None
+        unconverted = False
+        if fund["kind"] in (MF, STOCK, GOLD):
+            _, latest = _price_source(conn, fund, False)
+        if fund["currency"] != BASE:
+            fx = _fx(conn, fund["currency"])
+            if fx:
+                txns = calc.convert_txns(txns, fx)
+                latest = calc.convert_latest(latest, fx)
+            else:
+                unconverted = True
+        category = (nav.scheme_meta(conn, fund["scheme_code"]) or {}).get("scheme_category") if fund["kind"] == MF and fund["scheme_code"] else None
+        fmv = None
+        if fund["kind"] in (MF, STOCK) and any(t["type"] in calc.PURCHASES and t["date"] < tax.GRANDFATHER_UNTIL for t in txns):
+            p = _price_on_or_before(conn, r, tax.GRANDFATHER_DAY)
+            fmv = p[1] if p else None
+        exit_from = None
+        if fund["kind"] == GOLD:
+            d = fund["details"] or {}
+            issue = d.get("issue_date") or min((t["date"] for t in txns if t["type"] in calc.PURCHASES), default=None)
+            exit_from = gold.schedule(issue, 0.0, None, today)["exit_from"]
+        holdings.append({"fund": fund, "txns": txns, "category": category, "latest": latest, "fmv2018": fmv, "exit_from": exit_from, "unconverted": unconverted})
+    return tax.report(holdings, fy, slab, today)
+
 
 @app.get("/api/portfolio")
 def portfolio(conn: sqlite3.Connection = Depends(get_conn)):

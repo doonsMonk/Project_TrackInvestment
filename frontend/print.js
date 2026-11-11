@@ -7,6 +7,7 @@ import { valueChart, donutChart, seriesColors } from './charts.js';
 import { fmtMoney, fmtPct, fmtNum, fmtDate, esc, todayISO, isNum } from './format.js';
 import { openModal, closeModal, toast } from './ui.js';
 import { KINDS, ASSET_CLASSES } from './app.js';
+import { printBody as taxPrintBody, savedSlab } from './tax.js';
 
 export const SECTIONS = [
   { key: 'summary', label: 'Summary', hint: 'invested, value, profit, realised gains, XIRR' },
@@ -15,6 +16,7 @@ export const SECTIONS = [
   { key: 'folios', label: 'Folio-wise breakdown', hint: 'each folio, account, scheme or share of a holding' },
   { key: 'details', label: 'Holding details', hint: 'scheme or symbol, terms, maturity, schedule' },
   { key: 'income', label: 'Income and realised gains', hint: 'dividends, interest, sale proceeds and gains in the period' },
+  { key: 'tax', label: 'Capital gains and tax', hint: 'the whole portfolio: every sale by section with the estimated tax, dividends, interest and deductions, for the financial year the period ends in' },
   { key: 'transactions', label: 'Transactions', hint: 'every entry in the period, oldest first' },
   { key: 'upcoming', label: 'Upcoming dates', hint: 'maturities, premiums due, interest dates, lock-ins ending' },
   { key: 'charts', label: 'Value over time', hint: 'the chart, as a picture' },
@@ -22,7 +24,7 @@ export const SECTIONS = [
 const PRESETS = {
   snapshot: { label: 'Snapshot', hint: 'summary, allocation, holdings list', keys: ['summary', 'allocation', 'holdings'] },
   statement: { label: 'Statement', hint: 'summary, holdings, folios and every transaction', keys: ['summary', 'holdings', 'folios', 'transactions'] },
-  tax: { label: 'Tax year', hint: 'income, realised gains and the transactions of the last financial year', keys: ['summary', 'income', 'transactions'], period: 'lastfy' },
+  tax: { label: 'Tax year', hint: 'income, capital gains and tax, and the transactions of the last financial year', keys: ['summary', 'income', 'tax', 'transactions'], period: 'lastfy' },
   everything: { label: 'Everything', hint: 'all sections', keys: SECTIONS.map((s) => s.key) },
 };
 const DEFAULTS = { scope: 'portfolio', fund: '', status: 'active', kinds: 'all', sections: PRESETS.snapshot.keys.join(','), period: 'all', from: '', to: '', comments: '1', title: '' };
@@ -70,6 +72,17 @@ function periodOf(o) {
   }
 }
 const inPeriod = (p) => (t) => (!p.from || t.date >= p.from) && (!p.to || t.date <= p.to);
+/** The Indian financial year a date falls in: '2026-03-31' -> '2025-26'. */
+function fyOfDate(iso) {
+  const y = Number(iso.slice(0, 4));
+  const s = Number(iso.slice(5, 7)) >= 4 ? y : y - 1;
+  return `${s}-${String((s + 1) % 100).padStart(2, '0')}`;
+}
+
+function taxSection({ taxReport: r, comments }) {
+  if (!r) return section('Capital gains and tax', '<p class="empty">The tax report could not be loaded.</p>');
+  return section('Capital gains and tax', taxPrintBody(r, { comments }), `FY ${esc(r.fy)} · slab rate ${r.slab}% · an estimate, not advice`);
+}
 
 /** Hand the page to the platform's print dialog: Android's through the app bridge, the browser's otherwise. */
 export function doPrint() {
@@ -221,7 +234,12 @@ export async function renderPrintPage(qs) {
     const got = await Promise.all(rows.map((f) => api.get(`/api/funds/${f.id}`).catch(() => null)));
     rows.forEach((f, i) => { if (got[i]) detail[f.id] = got[i]; });
   }
-  const ctx = { o, portfolio, base, rows, detail, period, sections, comments: o.comments === '1' };
+  let taxReport = null;
+  if (sections.has('tax')) {  // the financial year the period ends in, at the slab rate chosen on the Tax page
+    const end = period.to || todayISO();
+    taxReport = await api.get(`/api/tax?fy=${fyOfDate(end)}&slab=${savedSlab()}`).catch(() => null);
+  }
+  const ctx = { o, portfolio, base, rows, detail, period, sections, comments: o.comments === '1', taxReport };
   const asOf = rows.map((f) => f.summary?.latest_nav_date).filter(Boolean).sort().pop();
   const single = o.scope === 'fund' ? rows[0] : null;
   const scopeText = single ? `${esc(single.name)}` : `Portfolio${o.status === 'closed' ? ' · closed holdings' : o.status === 'all' ? ' · active and closed holdings' : ''}${o.kinds !== 'all' ? ` · ${o.kinds.split(',').map((k) => classOf(k).label).join(', ')}` : ''}`;
@@ -235,6 +253,7 @@ export async function renderPrintPage(qs) {
     if (sections.has('folios')) parts.push(foliosSection(ctx));
     if (sections.has('details')) parts.push(detailsSection(ctx));
     if (sections.has('income')) parts.push(incomeSection(ctx));
+    if (sections.has('tax')) parts.push(taxSection(ctx));
     if (sections.has('transactions')) parts.push(transactionsSection(ctx));
     if (sections.has('upcoming')) parts.push(upcomingSection(ctx));
     if (sections.has('charts')) parts.push(chartsSection(ctx));

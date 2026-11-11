@@ -102,18 +102,20 @@ def status(schedules: list[dict], txns: list[dict], today: date) -> dict:
     for i, s in enumerate(schedules):
         dues = due_dates(s, today)
         pending = []
+        paid = 0
         for due in dues:
             hit = _covered(due, purchases, s, taken)
             if hit:
                 taken.add(hit["id"])
+                paid += 1
             elif not s.get("paused"):
-                pending.append(due)
+                pending.append(due)  # a paused schedule asks for nothing, but its missed instalments are not "recorded" either
         # the next instalment after today
         nxt = None
         if not s.get("paused"):
             later = due_dates(s, today + timedelta(days=400))
             nxt = next((d for d in later if d > today.isoformat()), None)
-        entry = {**s, "index": i, "paid": len(dues) - len(pending), "pending": pending, "next_due": nxt}
+        entry = {**s, "index": i, "paid": paid, "pending": pending, "next_due": nxt}
         out.append(entry)
         pending_all.extend({"date": d, "amount": s["amount"], "folio": s["folio"], "index": i} for d in pending)
     pending_all.sort(key=lambda x: x["date"])

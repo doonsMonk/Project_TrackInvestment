@@ -175,7 +175,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 val manager = getSystemService(Context.PRINT_SERVICE) as PrintManager
                 val name = getString(R.string.app_name)
-                manager.print(name, web.createPrintDocumentAdapter(name), PrintAttributes.Builder().build())
+                manager.print(name, web.createPrintDocumentAdapter(name), PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4).build())
             }
         }
 
