@@ -82,9 +82,10 @@ py -3 -m venv .venv
 
 ## Run as a desktop app (.exe)
 
-Build once with `build_exe.bat` (see *Software required* above). It produces
-`dist\InvestmentTracker.exe`, a single self-contained file (about 20 MB) that you can copy
-anywhere, pin to the taskbar, or put in your Startup folder.
+A ready-built exe is in the [release](release/) folder next to the Android APK, with install and upgrade
+notes and checksums in [release/README.md](release/README.md). Or build it yourself with `build_exe.bat`
+(see *Software required* above): it produces `dist\InvestmentTracker.exe`, a single self-contained file
+(about 45 MB) that you can copy anywhere, pin to the taskbar, or put in your Startup folder.
 
 Double-clicking the exe starts the local server (port 8000, or the next free one) and opens the app
 in its own window, with no console and no browser tabs. The window is Microsoft Edge (or Chrome) in

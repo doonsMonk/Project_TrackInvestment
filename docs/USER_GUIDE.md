@@ -45,6 +45,10 @@ This guide covers every feature in the app. The last section lists what was adde
 
 ### Using the exe
 
+The exe is in the project's `release` folder on GitHub, named `InvestmentTracker-<version>.exe`, next to the
+Android APK (the folder's own README has the install and upgrade steps and checksums). Download it into a folder
+of your own, such as `Documents\Investment Tracker`. You can also build it yourself with `build_exe.bat`.
+
 Double-click `InvestmentTracker.exe`. After a few seconds the app opens in its own window, with no
 address bar, tabs or console. Use it like any other program; **closing the window quits the app**.
 Double-clicking the exe again while it is open simply brings up another window of the same app.
@@ -1157,9 +1161,11 @@ treated as a change.
 
 The same app runs on an Android phone: the backend runs inside the app, the pages are the ones you know, and the
 data is the same encrypted file, `portfolio.enc`, kept in the app's private storage. It is installed from the
-APK file built from this project (`android\app\build\outputs\apk\debug\app-debug.apk`): copy it to the phone and
-open it, allowing the file manager to install unknown apps when asked. The first start unpacks the app and takes
-a few seconds; after that it opens like any other app and asks for the vault password.
+APK file in the project's `release` folder on GitHub, `InvestmentTracker-<version>.apk` (or the one you build
+yourself, `android\app\build\outputs\apk\debug\app-debug.apk`): download or copy it to the phone and open it,
+allowing the file manager to install unknown apps when asked. A newer APK installs over the old one and keeps the
+vault. The first start unpacks the app and takes a few seconds; after that it opens like any other app and asks
+for the vault password.
 
 - **The same data on the phone and the PC.** Long-press anywhere on a page to open the menu. **Save vault as…**
   writes the phone's vault file to a place you pick: Google Drive, OneDrive, Dropbox and the Downloads folder all
@@ -1249,6 +1255,7 @@ elsewhere still needs the password.
 | 4 Nov 2026 | Dividends are shown as realised, together with gains from sales, never inside the unrealised profit; the investment figure is also shown net of dividends received. |
 | 4 Nov 2026 | Exit and closed holdings: an Exit button records the sale of everything held; any sale that brings the units to zero marks the holding Closed and lists it under a Closed tab on the portfolio page, keeping all its data. |
 | 4 Nov 2026 | Version 0.4.0: the version is shown in the top bar; upgrades can no longer show stale screens (the window cache is cleared on start and the server forbids caching), and starting a newer exe replaces an older instance that is still running. |
+| 11 Nov 2026 | Ready builds in the project's `release` folder on GitHub: the Windows exe and the Android APK of the current version, with install, upgrade and checksum notes, so a PC, phone or tablet can download and install the app without building it. |
 | 10 Nov 2026 | Version 0.15.0: capital gains and tax. A Tax button opens a page for any financial year: every sale split into the lots it took (oldest first) and sorted into section 111A, 112A, 112 or the slab rate by the holding's tax class (equity, debt, other, gold bond) and the dates, with grandfathering, indexation and section 50AA where they apply; losses set off, the ₹1.25 lakh equity exemption, the estimated tax with cess; dividends, interest and payouts marked slab rate, exempt or needs a look (fixed deposit interest accrued each year, the 10(10D) check on a policy, the EPF ₹2.5 lakh rule); 80C and 80CCD deductions; what a sale today would be, short- and long-term, and when lots turn long-term; a Tax treatment field on a fund to override the class; a Capital gains and tax section in the print report and in the Tax year preset. |
 | 10 Nov 2026 | Version 0.14.2: Android printing fixed after the first run on a tablet. The print dialog's preview and the saved PDF showed the report's "Preparing the report…" placeholder instead of the report, because printing switches the page's colour scheme and the page re-rendered the report from scratch; the report now stays as it is while printing. Android's print dialog starts on A4 paper. On a phone the SIP schedule table shows one block per schedule instead of four narrow columns, and a paused schedule no longer counts its unrecorded instalments as recorded. Tested on a Samsung tablet and a Motorola phone: CAS import, SIP schedules and the Due banner, printing and saving a PDF, the file picker and the fingerprint offer on the lock screen (which only appears once the device has a screen lock and a fingerprint enrolled). |
 | 9 Nov 2026 | Version 0.14.1: SIP schedules on mutual funds and stocks. Enter the amount, day and frequency once; the app matches recorded purchases to the instalments, shows the ones due and not yet recorded (on the holding, in the portfolio row and in a Due banner), records them in one click at the due date's NAV, and a CAS import later replaces such an instalment with the statement's exact figures. The print report's Upcoming dates list the next instalments. |
