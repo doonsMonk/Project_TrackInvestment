@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Investment Tracker</title>
+  <meta name="description" content="Investment Tracker keeps a private, encrypted record of your Indian investments on your own PC or Android device, with an optional backup of the encrypted file to your own Google Drive, OneDrive or Dropbox.">
+  <style>
+    :root { --bg: #fafaf8; --card: #ffffff; --text: #1f2328; --muted: #59636e; --line: #d8dde3; --accent: #2a78d6; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #111417; --card: #1a1f24; --text: #e6e9ec; --muted: #9aa4ae; --line: #2c343c; --accent: #6ea8f0; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    main { max-width: 760px; margin: 0 auto; padding: 32px 16px 56px; }
+    h1 { font-size: 2rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+    h2 { font-size: 1.2rem; margin: 32px 0 8px; }
+    p, li { color: var(--text); }
+    .lead { color: var(--muted); font-size: 1.05rem; margin-top: 0; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; margin: 16px 0; }
+    a { color: var(--accent); }
+    ul { padding-left: 20px; }
+    nav a { margin-right: 16px; }
+    footer { margin-top: 40px; color: var(--muted); font-size: 0.9rem; border-top: 1px solid var(--line); padding-top: 12px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Investment Tracker</h1>
+  <p class="lead">A private record of your Indian investments that lives on your own PC or Android device.</p>
+  <nav><a href="privacy.html">Privacy policy</a><a href="terms.html">Terms of service</a></nav>
+
+  <h2>What it does</h2>
+  <div class="card">
+    <ul>
+      <li>Tracks mutual funds, shares, NPS, EPF and PPF accounts, Sovereign Gold Bonds, fixed deposits and life insurance policies: every purchase, sale, dividend, interest credit and premium, what the holdings are worth today and how they have performed (XIRR, realised and unrealised gains).</li>
+      <li>Fetches daily prices from public sources: mutual fund NAVs from <a href="https://www.mfapi.in">mfapi.in</a> (AMFI data), share prices and exchange rates from Yahoo Finance, NPS scheme NAVs from NPS Trust, gold bond prices from the NSE.</li>
+      <li>Imports a CAMS / KFintech consolidated account statement, keeps SIP schedules, prints or saves reports as PDF, and works out capital gains and the estimated tax for a financial year under the Indian rules.</li>
+      <li>Keeps everything in one encrypted file (AES-GCM, key derived from your password with scrypt) on the device. There is no account, no server of ours, no analytics and no advertising.</li>
+    </ul>
+  </div>
+
+  <h2>Backup to your own cloud storage (optional)</h2>
+  <div class="card">
+    <p>You can connect the app to your own Google Drive, OneDrive or Dropbox account so that the encrypted file is backed up there after every change and can be restored on another device. The app asks only for access to the folder it creates itself: in Google Drive the permission is <code>drive.file</code>, which lets the app see and change only files it created. The file is encrypted before it leaves the device, so the cloud never holds readable data, and the sign-in tokens stay on the device. You can disconnect in the app at any time and revoke the access in your Google account's <a href="https://myaccount.google.com/permissions">third-party access</a> page.</p>
+  </div>
+
+  <h2>Where to get it</h2>
+  <div class="card">
+    <p>Investment Tracker is a personal project shared with people the developer knows. Builds for Windows and Android are published in the project's GitHub repository; ask the developer for access. The app is free and provided as is, without warranty; nothing it shows is financial or tax advice.</p>
+  </div>
+
+  <footer>
+    Developed by [your name]. Questions: <a href="mailto:[your contact email]">[your contact email]</a>. &middot; <a href="privacy.html">Privacy policy</a> &middot; <a href="terms.html">Terms of service</a>
+  </footer>
+</main>
+</body>
+</html>

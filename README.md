@@ -83,7 +83,10 @@ py -3 -m venv .venv
 ## Run as a desktop app (.exe)
 
 A ready-built exe is in the [release](release/) folder next to the Android APK, with install and upgrade
-notes and checksums in [release/README.md](release/README.md). Or build it yourself with `build_exe.bat`
+notes and checksums in [release/README.md](release/README.md). To let other people connect their own Google
+Drive, OneDrive or Dropbox, the OAuth app has to be published with each provider: the procedure is in
+[docs/PUBLISHING.md](docs/PUBLISHING.md) and the public pages it needs (home page, privacy policy, terms of
+service) are in [site/](site/). Or build it yourself with `build_exe.bat`
 (see *Software required* above): it produces `dist\InvestmentTracker.exe`, a single self-contained file
 (about 45 MB) that you can copy anywhere, pin to the taskbar, or put in your Startup folder.
 

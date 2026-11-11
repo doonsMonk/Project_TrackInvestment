@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy policy · Investment Tracker</title>
+  <meta name="description" content="How Investment Tracker handles your data, including what it does with your Google Drive, OneDrive or Dropbox account when you connect one.">
+  <style>
+    :root { --bg: #fafaf8; --card: #ffffff; --text: #1f2328; --muted: #59636e; --line: #d8dde3; --accent: #2a78d6; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #111417; --card: #1a1f24; --text: #e6e9ec; --muted: #9aa4ae; --line: #2c343c; --accent: #6ea8f0; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    main { max-width: 760px; margin: 0 auto; padding: 32px 16px 56px; }
+    h1 { font-size: 1.8rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+    h2 { font-size: 1.15rem; margin: 28px 0 8px; }
+    .meta { color: var(--muted); margin-top: 0; }
+    a { color: var(--accent); }
+    ul { padding-left: 20px; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    footer { margin-top: 40px; color: var(--muted); font-size: 0.9rem; border-top: 1px solid var(--line); padding-top: 12px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Privacy policy</h1>
+  <p class="meta">Investment Tracker &middot; effective 11 November 2026</p>
+
+  <p>Investment Tracker ("the app") is a personal-finance program that runs entirely on your own Windows PC or Android device. This policy explains what data the app handles, where it goes and what choices you have. The short version: your data stays on your device in an encrypted file; the app has no server, no account system, no analytics and no advertising; the only places your data can go are the price services the app queries and, if you choose to connect one, your own cloud storage account.</p>
+
+  <h2>1. Data you enter</h2>
+  <p>Everything you record in the app (holdings, folio and account numbers, transactions, premiums, comments, settings) is stored in a single file, <code>portfolio.enc</code>, in the app's data folder on your device. The file is encrypted with AES-GCM under a key derived from your password with scrypt. The password is never stored; if you lose it the file cannot be opened, by you or by anyone else. The developer has no access to this file or its contents.</p>
+
+  <h2>2. What the app sends to other services</h2>
+  <p>To show current values the app downloads prices from public services. It sends only what is needed to identify a price, never your holdings' quantities, amounts or personal details:</p>
+  <table>
+    <tr><th>Service</th><th>What is sent</th><th>What comes back</th></tr>
+    <tr><td>mfapi.in (AMFI mutual fund NAVs)</td><td>the AMFI scheme code, or a search term you type</td><td>NAV history, scheme names</td></tr>
+    <tr><td>Yahoo Finance</td><td>a share symbol or currency pair, or a search term you type</td><td>price history, exchange rates</td></tr>
+    <tr><td>NPS Trust</td><td>an NPS scheme identifier</td><td>scheme NAV history</td></tr>
+    <tr><td>NSE and a public gold-bond price page</td><td>nothing specific to you</td><td>Sovereign Gold Bond prices</td></tr>
+  </table>
+  <p>These services see your device's IP address, as any website does, and have their own privacy policies. The app sets no cookies and carries no tracking of any kind.</p>
+
+  <h2>3. Cloud backup: Google Drive, OneDrive and Dropbox</h2>
+  <p>Connecting a cloud account is optional. If you do, the app backs up your encrypted vault file to that account after each change, and can restore it on another device. For each provider:</p>
+  <ul>
+    <li><b>What the app asks for.</b> Google Drive: the <code>drive.file</code> permission, which lets the app see, create and change only the files it created itself (a folder named "Investment Tracker"); it cannot read your other Drive files. OneDrive: access to the app's own folder only (<code>Files.ReadWrite.AppFolder</code>). Dropbox: an app folder only.</li>
+    <li><b>What the app stores there.</b> The encrypted vault file, and a small note of which device made the backup and when. The cloud provider only ever receives ciphertext; your password never leaves the device, so neither the provider nor the developer can read the file.</li>
+    <li><b>What the app keeps on the device.</b> The sign-in tokens the provider issues, in <code>cloud_tokens.json</code> in the data folder, so that later backups need no new sign-in; and the account's display name or e-mail, shown in the app so you can see which account is connected.</li>
+    <li><b>What the app does not do.</b> It does not read, list, change or delete any other file in your account, does not collect your contacts or profile beyond the name shown, does not send any Google, Microsoft or Dropbox user data to the developer or to anyone else, does not use it for advertising, and does not let humans read it.</li>
+    <li><b>How to stop.</b> Click <b>Disconnect</b> in the app's Cloud dialog, or delete <code>cloud_tokens.json</code>; to revoke the permission at the provider, use Google's <a href="https://myaccount.google.com/permissions">third-party access</a> page, Microsoft's <a href="https://account.live.com/consent/Manage">apps and services</a> page, or Dropbox's <a href="https://www.dropbox.com/account/connected_apps">connected apps</a> page. The backup files in your account are yours: delete them there whenever you like.</li>
+  </ul>
+  <p>The app's use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy#additional_requirements_for_specific_api_scopes">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+  <h2>4. Statements you import</h2>
+  <p>A CAMS / KFintech consolidated account statement that you pick is read on your device by the app's own code. Its contents are not uploaded anywhere; the app looks up each scheme's ISIN in the public mfapi.in scheme list to find the AMFI code.</p>
+
+  <h2>5. Fingerprint unlock (Android)</h2>
+  <p>If you turn on fingerprint or screen-lock unlock, the app keeps your vault password encrypted under a key in the Android Keystore that can only be used after the device confirms your fingerprint or screen lock. The app never receives your fingerprint; Android handles the check. Turning the option off, or changing the device's enrolled fingerprints, discards the stored password.</p>
+
+  <h2>6. Children</h2>
+  <p>The app is not directed at children under 18 and knowingly collects no data from them.</p>
+
+  <h2>7. Your rights and your data</h2>
+  <p>Because the data is on your device, you control it directly: open the data folder to copy or delete <code>portfolio.enc</code>, <code>cloud_tokens.json</code> and the log file; uninstalling the Android app removes its data. There is nothing held by the developer to request, correct or delete.</p>
+
+  <h2>8. Changes to this policy</h2>
+  <p>If the app's handling of data changes, this page will be updated and the effective date above changed. The current version of the app always links to this page.</p>
+
+  <h2>9. Contact</h2>
+  <p>[your name], <a href="mailto:[your contact email]">[your contact email]</a>.</p>
+
+  <footer><a href="index.html">Investment Tracker</a> &middot; <a href="terms.html">Terms of service</a></footer>
+</main>
+</body>
+</html>
