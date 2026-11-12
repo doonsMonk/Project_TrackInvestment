@@ -1,12 +1,13 @@
 # Ready-to-install builds
 
-The latest build of Investment Tracker for each kind of device. Open a file here on GitHub and use its **Download**
-button. Only the current version is kept in this folder; earlier versions remain in the folder's history on GitHub.
+The latest build of Investment Tracker for each kind of device. Click a link to download it (or open the file on
+GitHub and use its download button). Only the current version is kept in this folder; earlier versions remain in
+the folder's history on GitHub.
 
 | File | For | Version | Size | SHA-256 |
 |---|---|---|---|---|
-| `InvestmentTracker-0.15.1.exe` | Windows 10 / 11 PC | 0.15.1 | 44 MB | `79181b3153d68aeaea1970ed3e71c87c4e0db6c4c32119916419a4f270d0d8eb` |
-| `InvestmentTracker-0.15.1.apk` | Android phone or tablet, Android 7.0 or later | 0.15.1 | 55 MB | `7e6e22126faf9c2d6b0043d270dd3aaafe56fea0073b109d39a137c5e5d7a060` |
+| [InvestmentTracker-0.15.1.exe](https://github.com/doonsMonk/Project_TrackInvestment/raw/main/release/InvestmentTracker-0.15.1.exe) | Windows 10 / 11 PC | 0.15.1 | 44 MB | `79181b3153d68aeaea1970ed3e71c87c4e0db6c4c32119916419a4f270d0d8eb` |
+| [InvestmentTracker-0.15.1.apk](https://github.com/doonsMonk/Project_TrackInvestment/raw/main/release/InvestmentTracker-0.15.1.apk) | Android phone or tablet, Android 7.0 or later | 0.15.1 | 55 MB | `7e6e22126faf9c2d6b0043d270dd3aaafe56fea0073b109d39a137c5e5d7a060` |
 
 Both builds carry the published Google Drive sign-in: in the app, **Cloud** shows Google Drive as ready to connect,
 with no set-up step.

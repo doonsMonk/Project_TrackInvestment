@@ -8,6 +8,19 @@ portfolio is locked versus redeemable.
 An Android build of the same app lives in `android/` (see `android/README.md`): the backend embedded with
 Chaquopy, the frontend in a WebView, the vault opened from or saved to any file.
 
+## Download
+
+Current version 0.15.1, ready to install (install and upgrade notes in [release/README.md](release/README.md)):
+
+| Device | Download | SHA-256 |
+|---|---|---|
+| Windows 10 / 11 PC | [InvestmentTracker-0.15.1.exe](https://github.com/doonsMonk/Project_TrackInvestment/raw/main/release/InvestmentTracker-0.15.1.exe) (44 MB) | `79181b3153d68aeaea1970ed3e71c87c4e0db6c4c32119916419a4f270d0d8eb` |
+| Android 7.0 or later | [InvestmentTracker-0.15.1.apk](https://github.com/doonsMonk/Project_TrackInvestment/raw/main/release/InvestmentTracker-0.15.1.apk) (55 MB) | `7e6e22126faf9c2d6b0043d270dd3aaafe56fea0073b109d39a137c5e5d7a060` |
+
+Windows: run the exe; the first time, SmartScreen asks for *More info* then *Run anyway* because the exe is not
+signed. Android: open the downloaded file and allow the install. Both keep your data on the device in an encrypted
+file and come with Google Drive backup ready to connect.
+
 Everything runs on your machine. Data lives in one password-encrypted file under `data/` (or a folder you choose,
 such as a cloud-synced one, via Change folder… on the lock screen / `settings.json`), and can be backed up to the
 user's own Google Drive, OneDrive or Dropbox after every change (`backend/cloud.py`: OAuth 2.0 with PKCE on the
