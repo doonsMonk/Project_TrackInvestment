@@ -1,8 +1,7 @@
 # Ready-to-install builds
 
 The latest build of Investment Tracker for each kind of device. Open a file here on GitHub and use its **Download**
-button (the repository is private, so sign in first). Only the current version is kept in this folder; earlier
-versions remain in the folder's history on GitHub.
+button. Only the current version is kept in this folder; earlier versions remain in the folder's history on GitHub.
 
 | File | For | Version | Size | SHA-256 |
 |---|---|---|---|---|
@@ -26,8 +25,7 @@ Both are built from the same source: the Windows exe by `build_exe.bat`, the APK
 
 ## Android
 
-1. Download the `.apk` on the phone or tablet (sign in to GitHub in the browser), or download it on the PC and copy
-   it over.
+1. Download the `.apk` on the phone or tablet, or download it on the PC and copy it over.
 2. Open the downloaded file from the download notification or the Files app. When asked, allow that app to
    install unknown apps, then tap **Install**. The first start unpacks the app and takes a few seconds.
 3. To upgrade, install the newer APK the same way; it goes over the old one and the vault stays in place. The APK

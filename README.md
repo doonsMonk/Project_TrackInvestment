@@ -376,6 +376,12 @@ data/                             portfolio.enc (encrypted database, created on 
 
 Interactive docs: http://127.0.0.1:8000/docs
 
+## Licence
+
+MIT, see [LICENSE](LICENSE). Chart.js (bundled in `frontend/vendor`) is MIT-licensed by its contributors; the
+CAS parser follows the approach of the MIT-licensed casparser project. Nothing in the repository is financial or
+tax advice, and the builds in `release/` come without warranty.
+
 ## Ideas for next steps
 
 - Import a CAMS / KFintech consolidated account statement or a broker holdings statement

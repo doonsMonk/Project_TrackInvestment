@@ -9,8 +9,10 @@ policy and terms of service. The `site/` folder holds them; this file is the pro
 ## 1. Put the three pages online
 
 Google and Dropbox must be able to open the pages, so they have to be on a public website whose domain you
-control. GitHub Pages on a public repository is free and enough (this project's repository is private, and Pages
-on a private repository needs a paid plan, so the site gets its own small public repository):
+control. GitHub Pages is free for a public repository. The simplest is a small public repository of its own for
+the site (the steps below); alternatively, now that this repository is public, its own Pages can serve the
+`site/` folder through a GitHub Actions deployment (Settings → Pages → Source: GitHub Actions, upload `site/`),
+at `https://doonsmonk.github.io/Project_TrackInvestment/`.
 
 1. On GitHub create a new **public** repository, for example `investment-tracker` (nothing in it).
 2. Fill `site/` in: replace `[your name]`, `[your contact email]` and `[your city]` in the three HTML files.
