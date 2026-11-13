@@ -36,6 +36,9 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.enableEdgeToEdge
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.PopupMenu
@@ -54,6 +57,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var progress: ProgressBar
     private val executor = Executors.newSingleThreadExecutor()
     private var port: Int = 0
+    /** The app itself opened another screen (file picker, print dialog, browser sign-in, installer): leaving for
+     *  that is not "the user went away", so the vault stays open for the way back. */
+    private var awayOnPurpose = false
+    private var lockedOnLeave = false
 
     private val vaultDir: File get() = File(filesDir, "data")
     private val vaultFile: File get() = File(vaultDir, "portfolio.enc")
@@ -70,7 +77,18 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Android 15 draws an app behind the status and navigation bars whatever the theme says (edge to edge), so
+        // the page is kept below the one and above the other by padding the root view with the bars' insets; the
+        // padded strip shows the window background, which matches the page's top bar. The same is done on every
+        // Android version so the app looks the same everywhere; the keyboard inset shrinks the page on 11+.
+        enableEdgeToEdge()
         setContentView(R.layout.activity_main)
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root)) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            val ime = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) insets.getInsets(WindowInsetsCompat.Type.ime()).bottom else 0
+            v.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime))
+            WindowInsetsCompat.CONSUMED
+        }
         web = findViewById(R.id.web)
         splash = findViewById(R.id.splash)
         status = findViewById(R.id.status)
@@ -167,8 +185,48 @@ class MainActivity : AppCompatActivity() {
 
     // ---- vault file actions ---------------------------------------------------------------------------------------
 
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        awayOnPurpose = true  // covers startActivity and the activity-result launchers alike
+        super.startActivityForResult(intent, requestCode, options)
+    }
+
+    /** The app left the screen (Home, another app, the recents list, the screen switched off): lock the vault, so
+     *  whoever picks the phone up next needs the password or the fingerprint. */
+    override fun onStop() {
+        super.onStop()
+        if (awayOnPurpose || isChangingConfigurations || port == 0) return
+        lockedOnLeave = true
+        Thread {
+            runCatching {
+                val conn = URL("http://127.0.0.1:$port/api/auth/lock").openConnection() as HttpURLConnection
+                try {
+                    conn.requestMethod = "POST"
+                    conn.setRequestProperty("Content-Type", "application/json")
+                    conn.connectTimeout = 3_000
+                    conn.readTimeout = 5_000
+                    conn.doOutput = true
+                    conn.outputStream.use { it.write("{}".toByteArray()) }
+                    conn.responseCode
+                } finally {
+                    conn.disconnect()
+                }
+            }
+        }.start()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (lockedOnLeave) {
+            lockedOnLeave = false
+            // the page learns the vault is locked and shows the lock screen (with the fingerprint button, if set up)
+            web.post { web.evaluateJavascript("window.dispatchEvent(new Event('vault-state'))", null) }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+        awayOnPurpose = false  // back in front, whatever screen the app had opened (some, like the print dialog, never stop it)
         runCatching { SignInService.stop(this) }  // back in front: the backend no longer needs the keep-alive
     }
 
@@ -179,8 +237,35 @@ class MainActivity : AppCompatActivity() {
         fun print() {
             runOnUiThread {
                 val manager = getSystemService(Context.PRINT_SERVICE) as PrintManager
+                awayOnPurpose = true  // the print dialog is another screen, opened by the app
                 val name = getString(R.string.app_name)
                 manager.print(name, web.createPrintDocumentAdapter(name), PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4).build())
+            }
+        }
+
+        /** Hand a downloaded update (a file under the app's own files folder) to Android's installer. */
+        @JavascriptInterface
+        fun installApk(path: String) {
+            runOnUiThread {
+                runCatching {
+                    val file = java.io.File(path).canonicalFile
+                    require(file.isFile && file.path.startsWith(filesDir.canonicalPath) && file.name.endsWith(".apk"))
+                    val uri = androidx.core.content.FileProvider.getUriForFile(this@MainActivity, "$packageName.files", file)
+                    startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+                }.onFailure { Toast.makeText(this@MainActivity, "Could not open the installer: ${it.message}", Toast.LENGTH_LONG).show() }
+            }
+        }
+
+        /** The page's theme changed: the strips behind the status and navigation bars follow it. */
+        @JavascriptInterface
+        fun setTheme(dark: Boolean) {
+            runOnUiThread {
+                val root = findViewById<View>(R.id.root)
+                root.setBackgroundColor(if (dark) 0xFF1A1A19.toInt() else 0xFFFCFCFB.toInt())
+                val c = androidx.core.view.WindowCompat.getInsetsController(window, root)
+                c.isAppearanceLightStatusBars = !dark
+                c.isAppearanceLightNavigationBars = !dark
             }
         }
 

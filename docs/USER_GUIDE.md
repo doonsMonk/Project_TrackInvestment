@@ -58,6 +58,22 @@ private profile, which is why it looks like a plain application window. If neith
 installed, the app opens in your default browser instead and a small "Investment Tracker is running"
 window appears with a **Quit** button.
 
+### Updating the app
+
+Click **Updates** in the top bar (it is there on the lock screen too). The app asks the project's GitHub
+Releases for the latest version and shows what is in it. When a newer one exists, **Download and install** fetches
+it with a progress bar, checks it against the checksum GitHub publishes, and applies it:
+
+- **Windows** – the app closes and reopens as the new version within a few seconds. The exe file is replaced where
+  it is, so shortcuts keep working, and the `data` folder next to it is not touched.
+- **Android** – Android's own installer opens: tap **Update**. The first time, Android asks you to allow
+  Investment Tracker to install apps; allow it and come back. The new version goes over the old one and the vault
+  stays.
+
+A few seconds after it starts, the app also checks quietly; when a newer version exists the button reads
+**Update to x.y.z**. Nothing is ever installed without your click, and only files from this project's own releases
+are accepted.
+
 The first time Windows may show "Windows protected your PC". Click **More info**, then **Run anyway**.
 This happens once because the exe is not signed.
 
@@ -107,6 +123,12 @@ overrides it, and the choice is remembered in your browser.
 ---
 
 ## 3. The Portfolio page
+
+The top bar holds the title, the version and a **menu button** (three bars) at the left. The menu slides in from
+the left with every action: **Portfolio**, **+ Add fund / stock**, **Refresh prices**, **Tax**, **Print**,
+**Cloud**, the light / dark switch, **Updates**, **Password** and **Lock**. Click outside it, press Esc or pick an
+item to close it. Where this guide says "click X in the top bar", X is now in that menu. On the portfolio page a
+round **+** button at the bottom right opens the Add dialog directly.
 
 This is the home page (click **Investment Tracker** or **Portfolio** in the top bar to return to it).
 It shows everything you own across all funds and stocks, **in rupees**. Stocks in other currencies are
@@ -1178,6 +1200,13 @@ for the vault password.
   the app locks so the file's own password is needed). On the PC, the vault is in the data folder (section 21),
   which can itself be a cloud-synced folder. Copy the file in one direction at a time, and keep only one device
   open while you make changes: both apps refuse to overwrite a file that another device changed.
+- **Locks when you leave.** Press Home, switch to another app, open the recents list or switch the screen off, and
+  the app locks the vault at once; coming back asks for the password, or the fingerprint if you turned that on.
+  Screens the app opens itself do not count as leaving: the file picker, the print dialog, a cloud sign-in in the
+  browser and the update installer bring you back to an unlocked app.
+- **Menu and add button.** The three-bar button at the top left opens the menu with every action (Portfolio, Add,
+  Refresh prices, Tax, Print, Cloud, theme, Updates, Password, Lock); on the portfolio page a round **+** at the
+  bottom right adds a holding.
 - **Cloud backup** works as on the PC: **Cloud** (or **Cloud backup…** on the lock screen), then **Connect**. The
   sign-in opens in the phone's browser; while it is open a small "Finishing the cloud sign-in" notification keeps
   the app running, and the browser hands back to the app when the provider says it is connected. Come back to the
@@ -1264,6 +1293,10 @@ elsewhere still needs the password.
 | 4 Nov 2026 | Dividends are shown as realised, together with gains from sales, never inside the unrealised profit; the investment figure is also shown net of dividends received. |
 | 4 Nov 2026 | Exit and closed holdings: an Exit button records the sale of everything held; any sale that brings the units to zero marks the holding Closed and lists it under a Closed tab on the portfolio page, keeping all its data. |
 | 4 Nov 2026 | Version 0.4.0: the version is shown in the top bar; upgrades can no longer show stale screens (the window cache is cleared on start and the server forbids caching), and starting a newer exe replaces an older instance that is still running. |
+| 13 Nov 2026 | Version 0.16.0, Android packaging: the app is now signed with the project's own release key and installs under a unique name, after a security app on a Pixel reported earlier builds as an unofficial copy of another app. Because of the new name and key, an earlier install is not replaced: move its vault with Save vault as… / Open vault file… or the cloud backup, then uninstall the old app. |
+| 13 Nov 2026 | Version 0.16.0, continued: the row of buttons in the top bar became a menu. A three-bar button opens a panel on the left with every action; the top bar keeps only that button and the title. On the portfolio page a round + at the bottom right adds a holding. The Android app locks the vault as soon as it leaves the screen (Home, another app, screen off), except when the app itself opened the other screen (file picker, print dialog, cloud sign-in, installer). |
+| 13 Nov 2026 | Version 0.16.0: the app updates itself. An Updates button (top bar, also on the lock screen) checks the project's GitHub Releases, shows the notes of the latest version, downloads it with a progress bar, verifies the checksum and applies it: the Windows exe swaps itself and restarts, the Android app hands the file to the system installer. A quiet check on start marks the button when a newer version exists. On Android the strips behind the status and navigation bars now follow the app's light or dark theme. |
+| 12 Nov 2026 | Version 0.15.2: on Android 15 (a Pixel 7a) the app was drawn behind the phone's status bar, hiding the top of the page; the app now keeps the page below the status bar and above the navigation bar on every Android version, and makes room for the keyboard. |
 | 11 Nov 2026 | Version 0.15.1: the Google Drive sign-in is built into the app. The Google OAuth app is published, and the builds carry its client, so Cloud shows Google Drive as ready to connect with no Set up step; Use your own client… still lets you paste a client of your own. On Android the sign-in page opens in the phone's browser and hands back to the app; a short-lived notification keeps the app running meanwhile, since Android would otherwise freeze it before the browser could hand back. Connecting a device no longer uploads its file over a copy that another device saved; the dialog offers Restore or Back up now instead. |
 | 11 Nov 2026 | Ready builds in the project's `release` folder on GitHub: the Windows exe and the Android APK of the current version, with install, upgrade and checksum notes, so a PC, phone or tablet can download and install the app without building it. |
 | 10 Nov 2026 | Version 0.15.0: capital gains and tax. A Tax button opens a page for any financial year: every sale split into the lots it took (oldest first) and sorted into section 111A, 112A, 112 or the slab rate by the holding's tax class (equity, debt, other, gold bond) and the dates, with grandfathering, indexation and section 50AA where they apply; losses set off, the ₹1.25 lakh equity exemption, the estimated tax with cess; dividends, interest and payouts marked slab rate, exempt or needs a look (fixed deposit interest accrued each year, the 10(10D) check on a policy, the EPF ₹2.5 lakh rule); 80C and 80CCD deductions; what a sale today would be, short- and long-term, and when lots turn long-term; a Tax treatment field on a fund to override the class; a Capital gains and tax section in the print report and in the Tax year preset. |

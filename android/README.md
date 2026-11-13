@@ -65,6 +65,44 @@ The print adapter renders the live page, and printing switches the page's colour
 The page's colour-scheme listener therefore ignores that change on the print route; before it did, the flip
 re-rendered the report from scratch and the print preview showed its "Preparing the report…" placeholder.
 
+## Screen edges
+
+With `targetSdk` 35, Android 15 draws the app behind the status and navigation bars whatever the theme's
+`statusBarColor` says (edge to edge is enforced), which hid the top of the page on a Pixel 7a. `MainActivity`
+therefore calls `enableEdgeToEdge()` on every version and pads the root view with the system-bar, cutout and (on
+Android 11+) keyboard insets, so the page sits between the bars and shrinks for the keyboard; the padded strip
+shows the window background, which matches the page's top bar in light and dark.
+
+## Package name and signing
+
+The installed app's id is `io.github.doonsmonk.investmenttracker` (the Kotlin package and Gradle `namespace` stay
+`com.investmenttracker.app`). The earlier id, `com.investmenttracker.app`, made Bitdefender on a Pixel report an
+"Unofficial Copy" of some other app; under the unique id it does not. An install under the old id is a different
+app to Android: move its vault across with Save vault as... / Open vault file... or the cloud backup, then remove it.
+
+Builds are signed with the project's release key when `android/keystore.properties` exists (git-ignored, next to
+`android/keystore/investment-tracker-release.jks`): `storeFile`, `storePassword`, `keyAlias`, `keyPassword`. Both
+build types use that key, so a debug build (WebView debugging on, for device tests) and the published release build
+(`gradlew assembleRelease`, not debuggable) install over each other. Without the file the debug key is used. Keep
+a copy of the keystore and the properties file somewhere safe: without them no update can be installed over the
+published app.
+
+## Locking on leaving
+
+`MainActivity.onStop` posts `/api/auth/lock` to the backend whenever the activity leaves the screen, and `onStart`
+then fires the page's `vault-state` event so it shows the lock screen. An override of `startActivityForResult`
+(which `startActivity` and the activity-result launchers go through) and the print call set `awayOnPurpose`, so
+screens the app opened itself (document picker, print dialog, browser sign-in, installer) do not lock it.
+
+## Updates
+
+The Updates dialog downloads the release's APK into `files/data/updates` (the backend does it, `backend/update.py`)
+and calls `AndroidApp.installApk(path)`. The activity checks the file is an `.apk` under the app's files folder,
+wraps it in a `FileProvider` URI (authority `<package>.files`, only `data/updates/` is shared) and starts
+`ACTION_VIEW` with the package-archive type, which opens the system installer; `REQUEST_INSTALL_PACKAGES` lets
+Android offer the "allow from this source" switch. An update installs only over a build signed with the same key.
+`AndroidApp.setTheme(dark)` colours the strips behind the system bars to match the page.
+
 ## Cloud sign-in
 
 The Cloud dialog's Connect button calls `AndroidApp.openUrl(url)`, which opens the provider's sign-in page in the
@@ -88,10 +126,10 @@ When the PC's USB ports are blocked, Android 11+ can be debugged over Wi-Fi (pho
    `adb pair <pairing ip:port> <code>` then `adb connect <ip:port from the Wireless debugging screen>`. Pairing is
    remembered; the connect port changes between sessions.
 3. `adb install -r dist/InvestmentTracker-<version>.apk` and `adb shell am start -n
-   com.investmenttracker.app/.MainActivity`. `adb logcat -d | grep -i investmenttracker` shows the app's log lines.
+   io.github.doonsmonk.investmenttracker/com.investmenttracker.app.MainActivity`. `adb logcat -d | grep -i investmenttracker` shows the app's log lines.
 4. The backend inside the phone listens on 127.0.0.1:8000; `adb forward tcp:8002 tcp:8000` lets scripts on the PC
    talk to it at http://127.0.0.1:8002 (the API suites take `TRACKER_BASE`).
-5. The debug build's WebView is inspectable: `adb shell pidof com.investmenttracker.app`, then
+5. The debug build's WebView is inspectable: `adb shell pidof io.github.doonsmonk.investmenttracker`, then
    `adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`; open chrome://inspect in Chrome or Edge on
    the PC, or talk to http://127.0.0.1:9333/json with the DevTools protocol directly (Playwright cannot attach to
    a WebView). `adb exec-out screencap -p > shot.png` takes a true device screenshot.

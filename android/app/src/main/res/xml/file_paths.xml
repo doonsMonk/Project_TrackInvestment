@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- the one folder the app shares a file from: a downloaded update, handed to the system installer -->
+<paths>
+    <files-path name="updates" path="data/updates/" />
+</paths>

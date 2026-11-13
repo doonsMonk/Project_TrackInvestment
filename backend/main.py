@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from .compat import field_validator, list_limits, model_validator  # pydantic v2 on the PC, v1 on Android
 
-from . import calc, cas, cloud, db, fd, gold, nav, nps, policy, quotes, sgb, sip, tax
+from . import calc, cas, cloud, db, fd, gold, nav, nps, policy, quotes, sgb, sip, tax, update
 
 # In the PyInstaller build the frontend is unpacked under sys._MEIPASS; in a dev checkout it's <project>/frontend.
 _BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
@@ -44,7 +44,7 @@ async def lifespan(_: FastAPI):
     db.vault.lock()  # flush and forget the key on shutdown
 
 
-VERSION = "0.15.1"
+VERSION = "0.16.0"
 app = FastAPI(title="Investment Tracker", version=VERSION, lifespan=lifespan)
 
 
@@ -247,6 +247,37 @@ def set_data_dir(body: DataDirIn):
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Could not write {db.SETTINGS_PATH}: {e}") from e
     return {"data_dir": str(target), "restart_required": not same, "copied": copied, "vault_exists_there": dest.exists()}
+
+
+@app.get("/api/update/check")
+def update_check():
+    """The latest release on GitHub against this copy's version; works with the vault locked."""
+    try:
+        return update.check(VERSION)
+    except update.UpdateError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/api/update/download")
+def update_download():
+    try:
+        return update.start_download(VERSION)
+    except update.UpdateError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+@app.get("/api/update/status")
+def update_status():
+    return update.status()
+
+
+@app.post("/api/update/apply")
+def update_apply():
+    """Windows: swap the exe and start the new one, which then asks this instance to quit."""
+    try:
+        return update.apply_windows()
+    except update.UpdateError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @app.post("/api/quit")

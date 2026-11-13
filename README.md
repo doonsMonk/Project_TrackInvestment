@@ -11,13 +11,13 @@ Chaquopy, the frontend in a WebView, the vault opened from or saved to any file.
 ## Download
 
 Every version is published under [Releases](https://github.com/doonsMonk/Project_TrackInvestment/releases), with
-the Windows exe and the Android APK attached. Current version 0.15.1 (install and upgrade notes in
+the Windows exe and the Android APK attached. Current version 0.16.0 (install and upgrade notes in
 [release/README.md](release/README.md)):
 
 | Device | Download | SHA-256 |
 |---|---|---|
-| Windows 10 / 11 PC | [InvestmentTracker-0.15.1.exe](https://github.com/doonsMonk/Project_TrackInvestment/releases/download/v0.15.1/InvestmentTracker-0.15.1.exe) (44 MB) | `79181b3153d68aeaea1970ed3e71c87c4e0db6c4c32119916419a4f270d0d8eb` |
-| Android 7.0 or later | [InvestmentTracker-0.15.1.apk](https://github.com/doonsMonk/Project_TrackInvestment/releases/download/v0.15.1/InvestmentTracker-0.15.1.apk) (55 MB) | `7e6e22126faf9c2d6b0043d270dd3aaafe56fea0073b109d39a137c5e5d7a060` |
+| Windows 10 / 11 PC | [InvestmentTracker-0.16.0.exe](https://github.com/doonsMonk/Project_TrackInvestment/releases/download/v0.16.0/InvestmentTracker-0.16.0.exe) (42 MB) | `e9cd7ee094214636ebeb1ae902c2cf1f9a266121fcacaa192b50b637ff7aaefe` |
+| Android 7.0 or later | [InvestmentTracker-0.16.0.apk](https://github.com/doonsMonk/Project_TrackInvestment/releases/download/v0.16.0/InvestmentTracker-0.16.0.apk) (51 MB) | `30916272f623f399d62519d8d37e9b12897ce1a9f180422cafbeed943bdbd63d` |
 
 Windows: run the exe; the first time, SmartScreen asks for *More info* then *Run anyway* because the exe is not
 signed. Android: open the downloaded file and allow the install. Both keep your data on the device in an encrypted
@@ -272,6 +272,11 @@ page shows the return in both currencies.
   sets losses off, estimates the tax with cess, lists dividends / interest / payouts (FD interest accrued along the deposit's
   curve, the 10(10D) check on a policy, the EPF ₹2.5 lakh rule, NPS / EPF withdrawals flagged), the 80C / 80CCD items and
   the short- / long-term split of what is still held; `details.tax_class` on a fund overrides the AMFI-category class
+- Self-update (`backend/update.py`, `frontend/update.js`): `GET /api/update/check` compares this copy's version with the
+  latest GitHub release, `POST /api/update/download` fetches the platform's asset into `<data>/updates` (size and SHA-256
+  digest checked, only this repository's release assets accepted), `POST /api/update/apply` renames the running exe to
+  `.old`, puts the download in its place and starts it (the new launcher asks the old instance to quit); on Android the
+  page calls `AndroidApp.installApk(path)`, which opens the system installer through a FileProvider
 - Android: fingerprint or screen-lock unlock. The page asks `AndroidApp.enableBiometric(password)` once; the
   activity keeps the password AES-GCM encrypted under an Android Keystore key with `setUserAuthenticationRequired`
   (biometric strong or device credential, per use, invalidated by new enrolments), and `AndroidApp.biometricUnlock()`
@@ -344,6 +349,7 @@ backend/
   quotes.py Yahoo Finance client and price / exchange-rate cache (stocks), base currency
   nps.py    NPS Trust client (scheme list, per-scheme NAV history) cached in the quotes table
   calc.py   XIRR, FIFO lots, summaries, value history, currency conversion
+  update.py self-update from the GitHub releases (check, download, verify, swap the exe)
   tax.py    capital gains by section, other income, deductions and the estimated tax (Indian rules, by date)
 frontend/
   index.html, styles.css          shell and theme tokens (light + dark)
@@ -373,6 +379,7 @@ data/                             portfolio.enc (encrypted database, created on 
 | DELETE | `/api/cloud/{provider}` | Forget the sign-in |
 | POST | `/api/import/cas` | Read a CAMS / KFintech CAS PDF: schemes with their matches and candidate codes, transactions in the app's terms with `existing_id` for ones already recorded, skipped lines with the reason |
 | GET | `/api/tax` | One financial year's capital gains (`?fy=2025-26`, default the current year; `slab=` the marginal rate for slab-taxed items): every sale's lots with term, section, rate and taxable gain; the sections netted with set-off and the 112A exemption; other income and deductions; the estimated tax; the short- / long-term split of open holdings; each holding's tax class and why |
+| GET, POST | `/api/update/check`, `/download`, `/status`, `/apply` | Latest GitHub release versus this copy; download this platform's file with progress; swap the exe and restart (Windows) |
 | GET | `/api/sgb/issues` | Every Sovereign Gold Bond series on the exchange list (symbol, name, issue date and price, latest price, interest dates) |
 | GET | `/api/gold/price` | The gold price per gram (latest, or `?on=` a date) and the recent entries |
 | POST | `/api/gold/price` | Record the gold price per gram for a date (`{date, price}`) |

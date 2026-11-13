@@ -16,7 +16,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.investmenttracker.app"
+        applicationId = "io.github.doonsmonk.investmenttracker"
         minSdk = 24
         targetSdk = 35
         versionCode = versionParts[0] * 10000 + versionParts[1] * 100 + versionParts[2]
@@ -24,10 +24,31 @@ android {
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }  // phones, and the x86_64 emulator
     }
 
+    // The release key lives outside git: android/keystore.properties names the keystore file and its passwords.
+    // With it, both build types are signed with that one key, so a debug build (WebView debugging on, for device
+    // tests) and a release build (what is published) install over each other. Without it, the debug key is used.
+    val keystoreProps = Properties().apply {
+        val f = rootProject.file("keystore.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    val hasReleaseKey = keystoreProps.getProperty("storeFile") != null
+    signingConfigs {
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")  // sideloaded personal app; replace for store release
+            signingConfig = signingConfigs.getByName(if (hasReleaseKey) "release" else "debug")
+        }
+        debug {
+            if (hasReleaseKey) signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

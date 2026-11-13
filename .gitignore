@@ -22,3 +22,7 @@ android/app/*.iml
 android/.kotlin/
 settings.json
 backend/cloud_builtin.json
+android/keystore/
+android/keystore.properties
+*.jks
+*.keystore

@@ -11,6 +11,7 @@ import { splitFolios, distribute, fyLabel } from './parse.js';
 import { openPrintModal, renderPrintPage } from './print.js';
 import { openCasImportModal } from './cas.js';
 import { renderTaxPage } from './tax.js';
+import { openUpdateModal, quietUpdateCheck } from './update.js';
 
 const app = document.getElementById('app');
 const RANGES = { '1M': 1, '3M': 3, '6M': 6, '1Y': 12, '3Y': 36, All: null };
@@ -97,6 +98,7 @@ function applyTheme() {
   const root = document.documentElement;
   if (state.theme === 'auto') root.removeAttribute('data-theme');
   else root.dataset.theme = state.theme;
+  try { window.AndroidApp?.setTheme?.(effectiveTheme() === 'dark'); } catch { /* older app shell */ }  // the phone's bar strips follow the theme
   const btn = document.getElementById('btn-theme');
   if (btn) {
     const dark = effectiveTheme() === 'dark';
@@ -3315,6 +3317,7 @@ async function render() {
   if (isPrint) document.documentElement.dataset.theme = 'light'; // a report prints on white whatever the theme
   else applyTheme();
   const m = hash.match(/^#\/fund\/(\d+)(?:\?(.*))?$/);
+  document.body.classList.toggle('on-dashboard', !isPrint && !m && !hash.startsWith('#/tax'));  // the floating + lives on the portfolio page
   try {
     if (isPrint) {
       await renderPrintPage(hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '');
@@ -3336,6 +3339,24 @@ async function render() {
 }
 
 document.getElementById('btn-add-fund').addEventListener('click', () => openFundModal(null));
+document.getElementById('btn-add-fund-menu').addEventListener('click', () => openFundModal(null));
+
+// ---------------------------------------------------------------- the menu drawer
+const drawer = document.getElementById('drawer');
+const drawerBackdrop = document.getElementById('drawer-backdrop');
+const menuBtn = document.getElementById('btn-menu');
+function setDrawer(open) {
+  drawer.classList.toggle('open', open);
+  drawer.setAttribute('aria-hidden', String(!open));
+  drawerBackdrop.hidden = !open;
+  menuBtn.setAttribute('aria-expanded', String(open));
+}
+menuBtn.addEventListener('click', () => setDrawer(!drawer.classList.contains('open')));
+document.getElementById('btn-menu-close').addEventListener('click', () => setDrawer(false));
+drawerBackdrop.addEventListener('click', () => setDrawer(false));
+drawer.addEventListener('click', (e) => { if (e.target.closest('.drawer-item') && !e.target.closest('#btn-theme')) setDrawer(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && drawer.classList.contains('open')) setDrawer(false); });
+window.addEventListener('hashchange', () => setDrawer(false));
 document.getElementById('btn-refresh').addEventListener('click', refreshNav);
 document.getElementById('btn-lock').addEventListener('click', lockNow);
 document.getElementById('btn-password').addEventListener('click', openPasswordModal);
@@ -3345,6 +3366,8 @@ document.getElementById('btn-print').addEventListener('click', () => {
   openPrintModal({ fundId: m ? Number(m[1]) : null });
 });
 document.getElementById('btn-tax').addEventListener('click', () => { location.hash = '#/tax'; });
+document.getElementById('btn-update').addEventListener('click', openUpdateModal);
+setTimeout(quietUpdateCheck, 4000);
 let bootPending = false;
 window.addEventListener('vault-state', () => {
   // an API call hit a locked (423) or not-yet-set-up (409) vault, e.g. after the idle auto-lock

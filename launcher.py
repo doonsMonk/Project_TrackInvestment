@@ -30,7 +30,7 @@ from pathlib import Path
 
 import uvicorn
 
-from backend import db
+from backend import db, update
 from backend.main import VERSION, app
 
 HOST = "127.0.0.1"
@@ -212,6 +212,7 @@ def main() -> int:
             )
             return 1
 
+    update.cleanup()  # the exe an earlier self-update moved aside, and its download
     port = _free_port(PREFERRED_PORT)
     url = f"http://{HOST}:{port}/"
     config = uvicorn.Config(app, host=HOST, port=port, log_level="warning", access_log=False, log_config=None)
